@@ -191,7 +191,7 @@ export async function startQichachaMcpApiKeyLogin(parentWindow?: BrowserWindow |
         webPreferences: {
           contextIsolation: true,
           nodeIntegration: false,
-          sandbox: true,
+          sandbox: false,
           partition: `qichacha-mcp-auth-${crypto.randomUUID()}`,
         },
       });

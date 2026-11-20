@@ -2,10 +2,14 @@ import { systemPreferences } from 'electron';
 import { EventEmitter } from 'events';
 
 import { CompanionCapability } from '../../shared/desktopCompanion/constants';
+import { readActiveAppId } from './linuxActiveApp';
 import { loadWindowsNative } from './windowsNative';
 
 const MAC_ACTIVATE_NOTIFICATION = 'NSWorkspaceDidActivateApplicationNotification';
 const WINDOWS_POLL_MS = 1_000;
+// The Linux lookup shells out (xprop, busctl, swaymsg); slower than the Windows call it replaces,
+// and quick enough that the name is there by the time a selection arrives.
+const LINUX_POLL_MS = 1_200;
 
 /**
  * Electron passes NSRunningApplication through as its description, e.g.
@@ -27,17 +31,23 @@ export interface ForegroundAppMonitor extends EventEmitter {
   isUserBusy(): boolean;
 }
 
-/** Emits `change` with the frontmost application's bundle id (macOS) or executable name (Windows). */
+/** Emits `change` with the frontmost application's bundle id (macOS), executable name (Windows)
+ * or window class (Linux). */
 export class CompanionForegroundMonitor extends EventEmitter implements ForegroundAppMonitor {
   readonly capability: CompanionCapability;
   private subscription: number | null = null;
   private pollTimer: ReturnType<typeof setInterval> | undefined;
   private current: string | null = null;
+  /** Keeps a slow Linux lookup from starting again before the last one answered. */
+  private polling = false;
 
   constructor() {
     super();
     if (process.platform === 'darwin') this.capability = CompanionCapability.Ready;
     else if (process.platform === 'win32') this.capability = loadWindowsNative() ? CompanionCapability.Ready : CompanionCapability.Unsupported;
+    // Linux is always worth trying: which lookup answers depends on the desktop, and a session that
+    // answers nothing simply reports no app rather than turning the feature off.
+    else if (process.platform === 'linux') this.capability = CompanionCapability.Ready;
     else this.capability = CompanionCapability.Unsupported;
   }
 
@@ -51,6 +61,19 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
       this.subscription = systemPreferences.subscribeWorkspaceNotification(MAC_ACTIVATE_NOTIFICATION, (_event, userInfo) => {
         this.update(parseRunningApplication(userInfo));
       });
+      return;
+    }
+    if (process.platform === 'linux') {
+      const poll = () => {
+        if (this.polling) return;
+        this.polling = true;
+        readActiveAppId()
+          .then(appId => { if (appId) this.update(appId); })
+          .catch(error => console.warn('[DesktopCompanion] Foreground app lookup failed:', error))
+          .finally(() => { this.polling = false; });
+      };
+      poll();
+      this.pollTimer = setInterval(poll, LINUX_POLL_MS);
       return;
     }
     const native = loadWindowsNative();

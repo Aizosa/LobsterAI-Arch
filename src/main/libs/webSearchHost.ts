@@ -194,7 +194,7 @@ const createDetachedPage = (context: WebSearchPageContext): WebSearchPage => {
       nodeIntegration: false,
       nodeIntegrationInSubFrames: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
       webSecurity: true,
       plugins: false,
       devTools: false,

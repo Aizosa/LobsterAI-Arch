@@ -78,6 +78,13 @@ const GESTURE_MAX_LINE_SLOP = 40;
 const SEEN_SELECTION_APPS = 32;
 // A selection shown later than this after the last gesture did not come from it.
 const GESTURE_LATENCY_MAX_MS = 10_000;
+// Standing in for the click that never arrives: how often the pointer is looked at, how many looks
+// in a row must find it away from the selection, and how far from the selection counts as away.
+// The bound is generous because the pointer crosses this area on its way to the toolbar, which sits
+// just below the selection.
+const POINTER_WATCH_MS = 300;
+const POINTER_AWAY_TICKS = 4;
+const POINTER_ANCHOR_SLOP = 220;
 // selection-hook's SelectionMethod and PositionLevel values (index.d.ts), named for analytics.
 const SELECTION_METHODS: Record<number, CompanionSelectionMethod> = {
   1: CompanionSelectionMethod.Uia,
@@ -130,12 +137,23 @@ export interface SelectionHookLike extends EventEmitter {
   cleanup(): void;
   setGlobalFilterMode(mode: number, list?: string[]): boolean;
   getCurrentSelection(): SelectionHookEvent | null;
+  /** Linux only; absent on the other platforms' builds. */
+  linuxGetEnvInfo?(): LinuxSelectionEnv | null;
+}
+
+/** selection-hook's LinuxEnvInfo, cut down to what decides how the companion behaves. */
+export interface LinuxSelectionEnv {
+  /** 0 unknown, 1 X11, 2 Wayland. */
+  displayProtocol: number;
+  /** Whether /dev/input is readable, which is also whether pointer and key events are emitted. */
+  hasInputDeviceAccess: boolean;
 }
 
 export interface SelectionHookModule {
   new (): SelectionHookLike;
   FilterMode: { INCLUDE_LIST: number; EXCLUDE_LIST: number };
   PositionLevel: { SEL_FULL: number };
+  DisplayProtocol?: { UNKNOWN: number; X11: number; WAYLAND: number };
 }
 
 export interface SelectionHost {
@@ -159,7 +177,13 @@ export interface SelectionHost {
 }
 
 function loadSelectionHook(): SelectionHookModule | null {
-  if (process.platform !== 'darwin' && process.platform !== 'win32') return null;
+  // Linux is in: selection-hook reads the PRIMARY selection through XFixes on X11 and through
+  // wlr/ext-data-control on Wayland, so the text is there without a simulated copy. What it cannot
+  // give us on Linux is a text bounding box — every corner is INVALID_COORDINATE and posLevel never
+  // passes MOUSE_DUAL — so selectionAnchor() takes its pointer branch and places the toolbar where
+  // the gesture ended. Measured on KWin 6.8: the pointer coordinates are real (compositor IPC), not
+  // the -99999 sentinel.
+  if (process.platform !== 'darwin' && process.platform !== 'win32' && process.platform !== 'linux') return null;
   try {
     return require('selection-hook') as SelectionHookModule;
   } catch (error) {
@@ -178,9 +202,13 @@ function visibleArea(bounds: CompanionRect): CompanionRect {
   return { x: bounds.x + pad, y: bounds.y + pad, width: bounds.width - pad * 2, height: bounds.height - pad * 2 };
 }
 
-/** Selection-hook reports physical pixels on Windows and points on macOS. */
+/**
+ * Selection-hook reports screen coordinates on Windows and Linux and logical points on macOS.
+ * Linux needs the conversion for the same reason Windows does: X11 grows its virtual coordinate
+ * space under `xrandr --scale` fractional scaling, while Electron lays windows out in DIP.
+ */
 function toDip(point: Point): Point {
-  return process.platform === 'win32' ? screen.screenToDipPoint(point) : point;
+  return process.platform === 'darwin' ? point : screen.screenToDipPoint(point);
 }
 
 export function selectionAnchor(data: SelectionHookEvent, fullLevel: number, cursor: Point): CompanionSelectionAnchor {
@@ -283,6 +311,18 @@ export class CompanionSelectionController {
   private permissionTimer: ReturnType<typeof setInterval> | undefined;
   private readonly gesture = new SelectionGestureTracker();
   private readonly misses = new SelectionMissTracker(appId => this.reportMiss(appId));
+  /**
+   * Whether the hook itself reports pointer and key events. False on a Wayland session without
+   * /dev/input access: selection-hook then falls back to data-control debounce and emits selections
+   * only, so nothing else in this class may assume a click or a keystroke will arrive. The pointer
+   * watchdog below covers what the hook would otherwise have told us.
+   */
+  private hookReportsInput = true;
+  /** The Wayland degradation seen at start(), for logs and for the accessibility report. */
+  private linuxEnv: LinuxSelectionEnv | null = null;
+  private pointerTimer: ReturnType<typeof setInterval> | undefined;
+  /** Consecutive watchdog ticks that found the pointer away from both the selection and the toolbar. */
+  private pointerAwayTicks = 0;
   /** The pointer at the current left press was the I-beam or an app's own cursor (Windows). */
   private pressOverText = false;
   /** When the last selecting gesture ended, until a selection claims it. */
@@ -502,6 +542,7 @@ export class CompanionSelectionController {
     clearTimeout(this.showTimer);
     this.pendingShow = false;
     this.endCapture();
+    this.stopPointerWatch();
     if (!this.selection) return;
     this.selection = null;
     const win = this.window;
@@ -516,6 +557,7 @@ export class CompanionSelectionController {
   dispose(): void {
     clearInterval(this.permissionTimer);
     clearTimeout(this.showTimer);
+    this.stopPointerWatch();
     this.misses.cancel();
     this.stopHook();
     try { this.hook?.cleanup(); } catch { /* already released */ }
@@ -571,12 +613,82 @@ export class CompanionSelectionController {
         globalFilterList: this.excludedApps(),
       });
       if (this.running) console.log('[DesktopCompanion] Selection hook started');
+      if (this.running) this.noteHookInputCoverage();
       return this.running;
     } catch (error) {
       console.error('[DesktopCompanion] Selection hook failed to start:', error);
       this.running = false;
       return false;
     }
+  }
+
+  /**
+   * Asks the hook what it can actually deliver. On Linux the answer depends on the session and on
+   * whether /dev/input is readable, and it decides whether the rest of this class may wait for the
+   * click or keystroke that would normally close the toolbar.
+   */
+  private noteHookInputCoverage(): void {
+    const env = this.hook?.linuxGetEnvInfo?.() ?? null;
+    this.linuxEnv = env;
+    const wayland = this.module?.DisplayProtocol?.WAYLAND ?? 2;
+    this.hookReportsInput = !(env?.displayProtocol === wayland && !env.hasInputDeviceAccess);
+    if (!this.hookReportsInput) {
+      console.log(
+        '[DesktopCompanion] Selection hook emits selections only (Wayland without /dev/input access);'
+        + ' a pointer watchdog closes the toolbar instead of a click',
+      );
+    }
+  }
+
+  /**
+   * Closes the toolbar when the pointer moves away from it, for sessions where the hook will never
+   * report the click that would otherwise do it. Without this the toolbar stays on screen until the
+   * next selection replaces it, because on Wayland without /dev/input access there is no mouse-down,
+   * mouse-up, wheel or key event at all.
+   *
+   * A no-op wherever the hook does report input, so the click path stays in charge there.
+   */
+  private startPointerWatch(): void {
+    this.stopPointerWatch();
+    if (this.hookReportsInput) return;
+    this.pointerTimer = setInterval(() => this.tickPointerWatch(), POINTER_WATCH_MS);
+  }
+
+  private stopPointerWatch(): void {
+    clearInterval(this.pointerTimer);
+    this.pointerTimer = undefined;
+    this.pointerAwayTicks = 0;
+  }
+
+  private tickPointerWatch(): void {
+    const selection = this.selection;
+    const win = this.window;
+    if (!selection || selection.mode !== DesktopCompanionSelectionMode.Toolbar || !win || win.isDestroyed()) {
+      this.stopPointerWatch();
+      return;
+    }
+    // A menu the user opened is theirs to close, and it covers pointer positions the check below
+    // cannot see.
+    if (selection.menuOpen) {
+      this.pointerAwayTicks = 0;
+      return;
+    }
+    const cursor = screen.getCursorScreenPoint();
+    if (rectContains(win.getBounds(), cursor) || this.nearSelection(cursor)) {
+      this.pointerAwayTicks = 0;
+      return;
+    }
+    if (++this.pointerAwayTicks >= POINTER_AWAY_TICKS) this.hide();
+  }
+
+  /** Whether the pointer is still around the text the toolbar belongs to, in DIP like both sides. */
+  private nearSelection(cursor: Point): boolean {
+    const anchor = this.anchor;
+    if (!anchor) return false;
+    return cursor.x >= anchor.left - POINTER_ANCHOR_SLOP
+      && cursor.x <= anchor.right + POINTER_ANCHOR_SLOP
+      && cursor.y >= anchor.top - POINTER_ANCHOR_SLOP
+      && cursor.y <= anchor.bottom + POINTER_ANCHOR_SLOP;
   }
 
   private stopHook(): void {
@@ -624,12 +736,21 @@ export class CompanionSelectionController {
     const tooLarge = isCompanionTextTooLarge(text);
     const readable = tooLarge || !!text.trim();
     if (readable) this.misses.resolve();
-    if (isCompanionSelectionBlocked(data.programName ?? '', this.host.preferences().selectionExcludedApps)) return;
+    // A Wayland session reports no program name: the protocol hides other clients. The frontmost
+    // application stands in for it, which is the same app in practice because selecting text does
+    // not move focus. Without this the exclusion lists would match nothing there, and the toolbar
+    // would open over a password manager's window.
+    const appId = data.programName || this.host.foregroundApp?.() || '';
+    if (isCompanionSelectionBlocked(appId, this.host.preferences().selectionExcludedApps)) return;
+    // Still unknown — no program name and no frontmost app to ask. The one case left to tell apart
+    // is our own text: anything selected in a LobsterAI window is something the user is already
+    // reading, and a toolbar over it would only repeat that.
+    if (!appId && BrowserWindow.getFocusedWindow()) return;
     if (this.selection?.pinned) return;
     if (!readable) return;
     const now = Date.now();
     this.shown = {
-      appId: data.programName ?? '',
+      appId,
       method: data.method,
       posLevel: data.posLevel,
       textLength: text.length,
@@ -643,7 +764,7 @@ export class CompanionSelectionController {
       // Copy must preserve the selection verbatim; AI requests apply their own limits.
       text: tooLarge ? '' : text,
       tooLarge,
-      appId: data.programName ?? '',
+      appId,
       actions: tooLarge ? [] : rankCompanionSelectionActions(text),
       mode: DesktopCompanionSelectionMode.Toolbar,
       action: null,
@@ -669,6 +790,7 @@ export class CompanionSelectionController {
     this.pendingShow = true;
     clearTimeout(this.showTimer);
     this.showTimer = setTimeout(() => this.reveal(), SHOW_FALLBACK_MS);
+    this.startPointerWatch();
   }
 
   private onMouseDown = (data: MouseEventData): void => {

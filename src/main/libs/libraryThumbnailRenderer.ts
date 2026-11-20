@@ -412,7 +412,7 @@ export class LibraryThumbnailRenderer {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true,
+        sandbox: false,
         webSecurity: true,
         partition: LIBRARY_THUMBNAIL_PARTITION,
         backgroundThrottling: false,

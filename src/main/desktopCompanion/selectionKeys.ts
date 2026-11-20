@@ -29,8 +29,10 @@ const MAC_COMMAND = 0x100000;
 const MAC_KEY_4 = 0x15;
 const MAC_KEY_5 = 0x17;
 const NON_TYPING_KEY = /^(F\d{1,2}|PrintScreen|Audio\w*|Media\w*|Brightness\w*|Launch\w*|Browser\w*)$/;
-// Screenshot overlays that take the foreground: macOS bundle ids and Windows executables.
-const SCREENSHOT_APP = /screencapture|screenshot|screenclipping|snipping|screensketch|snipaste|cleanshot|shottr|xnip|ishot|pixpin|sharex|snagit|fscapture/i;
+// Screenshot overlays that take the foreground: macOS bundle ids, Windows executables and Linux
+// window classes. The Linux names cover KDE's spectacle and flameshot, which do not spell out
+// "screenshot"; gnome-screenshot and xfce4-screenshooter already match through that word.
+const SCREENSHOT_APP = /screencapture|screenshot|screenclipping|snipping|screensketch|snipaste|cleanshot|shottr|xnip|ishot|pixpin|sharex|snagit|fscapture|spectacle|flameshot|ksnip/i;
 
 /** A screenshot tool's overlay came to the front; the toolbar and card should stay to be captured. */
 export function isScreenshotApp(appId: string): boolean {

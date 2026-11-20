@@ -51,7 +51,12 @@ const MAC_OS_KIT_BUNDLE: ComputerUseKitBundleDescriptor = {
   sizeBytes: ComputerUseKitBundleIntegrity.MacOS.SizeBytes,
 };
 
-const ComputerUseKitBundlesByRuntimeTarget = {
+/**
+ * Only the targets that fetch a kit appear here. Linux has no download: its helper is compiled from
+ * `resources/computer-use-linux` and shipped inside the app, so there is nothing to verify or
+ * unpack, and the absence of an entry is what says so.
+ */
+const ComputerUseKitBundlesByRuntimeTarget: Partial<Record<ComputerUseRuntimeTarget, ComputerUseKitBundleDescriptor>> = {
   [ComputerUseRuntimeTarget.MacArm64]: MAC_OS_KIT_BUNDLE,
   [ComputerUseRuntimeTarget.MacX64]: MAC_OS_KIT_BUNDLE,
   [ComputerUseRuntimeTarget.WindowsX64]: {
@@ -59,7 +64,7 @@ const ComputerUseKitBundlesByRuntimeTarget = {
     sha256: ComputerUseKitBundleIntegrity.WindowsX64.Sha256,
     sizeBytes: ComputerUseKitBundleIntegrity.WindowsX64.SizeBytes,
   },
-} as const satisfies Record<ComputerUseRuntimeTarget, ComputerUseKitBundleDescriptor>;
+} as const satisfies Partial<Record<ComputerUseRuntimeTarget, ComputerUseKitBundleDescriptor>>;
 
 function isFile(filePath: string): boolean {
   try {
@@ -79,7 +84,8 @@ export function isComputerUseKitSupportedPlatform(): boolean {
 
 export function getCurrentComputerUseKitBundleDescriptor(): ComputerUseKitBundleDescriptor | null {
   const runtime = getCurrentComputerUseRuntimeDescriptor();
-  return runtime ? ComputerUseKitBundlesByRuntimeTarget[runtime.target] : null;
+  if (!runtime) return null;
+  return ComputerUseKitBundlesByRuntimeTarget[runtime.target] ?? null;
 }
 
 export function resolveBundledComputerUseKitArchivePath(

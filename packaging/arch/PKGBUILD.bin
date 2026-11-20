@@ -1,0 +1,130 @@
+# Maintainer: Aizosa <aizosa@localhost>
+#
+# Packages an already-built AppImage. This is the variant to use day to day: it needs no compiler,
+# no npm install and no OpenClaw runtime assembly, and it finishes in seconds.
+#
+# Produce the AppImage first, on the machine that can build it:
+#
+#   npm run dist          # writes dist/LobsterAI-Setup-*-x64.AppImage and a .deb
+#
+# Then drop the AppImage next to this file, refresh the checksum and build:
+#
+#   makepkg -g >> PKGBUILD     # replaces the SKIP below with a real sha256
+#   makepkg -si
+#
+# Once releases exist, replace the local source with the release URL and keep the checksum:
+#
+#   source=("LobsterAI-${pkgver}.AppImage::${url}/releases/download/v${pkgver}/LobsterAI-${pkgver}-x86_64.AppImage")
+
+pkgname=lobsterai-bin
+pkgver=2026.11.16
+pkgrel=1
+pkgdesc='AI desktop assistant with a floating selection toolbar (prebuilt)'
+arch=('x86_64')
+# No url and no license, on purpose. The source is netease-youdao/LobsterAI under MIT, but that
+# covers the source, not this package: it is a private local build, not distributed and not
+# licensed to anyone. Declaring MIT here would read as granting that licence over the binaries.
+provides=('lobsterai')
+conflicts=('lobsterai')
+depends=(
+  'gtk3'
+  'nss'
+  'libxss'
+  'libxtst'
+  'libdrm'
+  'mesa'
+  'alsa-lib'
+  'libcups'
+  'libpulse'
+  'libnotify'
+  'libsecret'
+  'xdg-utils'
+  'libxkbcommon'
+  'wayland'
+)
+optdepends=(
+  'xdg-desktop-portal: screen sharing and remote input on Wayland'
+  'xdg-desktop-portal-kde: the KDE backend for the above'
+  'xdg-desktop-portal-gnome: the GNOME backend for the above'
+)
+# The AppImage payload is already stripped and its layout must stay byte-identical.
+options=('!strip' '!debug')
+
+# Local file: place the AppImage beside this PKGBUILD.
+source=("LobsterAI-${pkgver}.AppImage")
+sha256sums=('SKIP')
+
+# BSD wc pads its numeric output to a fixed column width, where GNU wc does not. makepkg's own
+# dirsize() pipes `| wc -c` straight into .PKGINFO, so on a machine whose wc comes from BSD (a
+# coreutils-free setup, say) the file ends up with `size =        1614889059` and pacman cannot
+# parse the padding: `pacman -Qip` then reports an installed size of 0.
+#
+# Same hardlink-aware byte count as makepkg's, with the whitespace stripped. On a GNU userland the
+# strip is a no-op.
+dirsize() {
+  local file inode size
+  declare -A files
+
+  size=$( {
+    find . -type f -links 1 -exec cat {} + 2>/dev/null
+    while read -rd ' ' inode; do
+      IFS= read -r file
+      if [[ -z ${files[$inode]} ]]; then
+        files[$inode]=found
+        cat "$file"
+      fi
+    done < <(find . -type f -links +1 -exec stat -c '%i %n' {} + 2>/dev/null)
+  } | wc -c )
+
+  echo "${size//[[:space:]]/}"
+}
+
+build() {
+  cd "$srcdir"
+
+  # --appimage-extract needs no FUSE mount, so this works in a build container and over ssh.
+  chmod +x "LobsterAI-${pkgver}.AppImage"
+  "./LobsterAI-${pkgver}.AppImage" --appimage-extract >/dev/null
+
+  # An AppImage unpacked this way always lands in squashfs-root.
+  mv squashfs-root app
+}
+
+package() {
+  cd "$srcdir"
+
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a app/. "$pkgdir/opt/$pkgname/"
+
+  # electron-builder names the executable after productName.
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/$pkgname/LobsterAI" "$pkgdir/usr/bin/lobsterai"
+
+  # The AppImage carries its own .desktop and icons; point them at the installed path instead of
+  # shipping the AppImage's relative ones, which assume they sit next to the binary.
+  install -d "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/$pkgname.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=LobsterAI
+Comment=AI desktop assistant with a floating selection toolbar
+Exec=/opt/lobsterai-bin/LobsterAI %U
+Icon=lobsterai-bin
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=LobsterAI
+DESKTOP
+  chmod 644 "$pkgdir/usr/share/applications/$pkgname.desktop"
+
+  local icon
+  for icon in "$srcdir"/app/usr/share/icons/hicolor/*/apps/*.png; do
+    [[ -e $icon ]] || continue
+    local size
+    size=$(basename "$(dirname "$(dirname "$icon")")")
+    install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/$size/apps/$pkgname.png"
+  done
+  # AppImages built without an icon theme still put a top-level one in the payload.
+  if [[ -f "$srcdir/app/LobsterAI.png" ]]; then
+    install -Dm644 "$srcdir/app/LobsterAI.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/$pkgname.png"
+  fi
+}

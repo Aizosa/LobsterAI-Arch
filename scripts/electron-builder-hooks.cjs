@@ -124,6 +124,15 @@ function verifyPreinstalledPlugins(runtimeRoot, buildHint) {
     if (!plugin.id) continue;
     const pluginDir = resolvePreinstalledPluginDir(runtimeRoot, plugin);
     if (!existsSync(pluginDir)) {
+      // Optional plugins are declared in package.json but pulled from sources that do not exist
+      // everywhere: moltbot-popo lives on an internal NetEase registry, openclaw-nim-channel on a
+      // GitHub repository. `openclaw:plugins` already skips them with a warning when the source is
+      // unreachable, so failing the pack here would make the app impossible to build outside that
+      // network for no gain — the app loads whatever plugins are present.
+      if (plugin.optional === true) {
+        console.log(`[electron-builder-hooks] Optional plugin ${plugin.id} not bundled; skipping.`);
+        continue;
+      }
       missing.push(plugin.id);
     } else {
       verifyRuntimeBundledPlugin(runtimeRoot, plugin);

@@ -31,6 +31,7 @@ import {
   pruneGatewayLogs,
 } from './gatewayLogRotation';
 import { recoverInstallerResourcesFromTar } from './installerResourceRecovery';
+import { findAvailablePortDescending, isLoopbackPortAvailable } from './loopbackListen';
 import { detectLoopbackBlock, LoopbackSelfTestOutcome } from './loopbackSelfTest';
 import { mergeNoProxyValue } from './noProxyEnv';
 import { getCodexHomeDir } from './openaiCodexAuth';
@@ -280,17 +281,6 @@ const findPath = (candidates: string[]): string | null => {
     }
   }
   return null;
-};
-
-const isPortAvailable = async (port: number): Promise<boolean> => {
-  return await new Promise((resolve) => {
-    const server = net.createServer();
-    server.once('error', () => resolve(false));
-    server.once('listening', () => {
-      server.close(() => resolve(true));
-    });
-    server.listen(port, '127.0.0.1');
-  });
 };
 
 const isPortReachable = (host: string, port: number, timeoutMs = 1200): Promise<boolean> => {
@@ -2210,24 +2200,19 @@ export class OpenClawEngineManager extends EventEmitter {
 
     const uniqCandidates = Array.from(new Set(candidates));
     for (const candidate of uniqCandidates) {
-      if (await isPortAvailable(candidate)) {
+      if (await isLoopbackPortAvailable(candidate)) {
         return candidate;
       }
     }
 
-    // Scan ports in parallel batches of 10 for faster resolution.
-    const BATCH_SIZE = 10;
-    for (let batch = 0; batch * BATCH_SIZE < GATEWAY_PORT_SCAN_LIMIT; batch += 1) {
-      const batchStart = DEFAULT_GATEWAY_PORT + batch * BATCH_SIZE + 1;
-      const batchEnd = Math.min(batchStart + BATCH_SIZE, DEFAULT_GATEWAY_PORT + GATEWAY_PORT_SCAN_LIMIT + 1);
-      const portBatch = Array.from({ length: batchEnd - batchStart }, (_, i) => batchStart + i);
-      const results = await Promise.all(
-        portBatch.map(async (p) => (await isPortAvailable(p)) ? p : null),
-      );
-      const available = results.find((p) => p !== null);
-      if (available != null) {
-        return available;
-      }
+    // Default, preferred and persisted ports are all taken: decrement from the
+    // default (18789 - 1, - 2, ...) so the picked port stays predictable across
+    // launches instead of jumping to a random ephemeral one.
+    const decremented = await findAvailablePortDescending(DEFAULT_GATEWAY_PORT - 1, {
+      maxAttempts: GATEWAY_PORT_SCAN_LIMIT,
+    });
+    if (decremented != null) {
+      return decremented;
     }
 
     throw new Error('No available loopback port for OpenClaw gateway.');

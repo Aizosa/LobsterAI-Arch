@@ -166,7 +166,7 @@ export async function showAppQuitDialog(
       preload: path.join(app.getAppPath(), 'dist-electron/appQuitConfirmationPreload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       spellcheck: false,
     },
   });

@@ -106,6 +106,92 @@ const MAC_PREFIXES: Array<[string, CompanionAppCategory]> = [
   ['com.microsoft.edgemac.', C.Browser],
 ];
 
+/**
+ * Linux window classes, compared case-insensitively.
+ *
+ * Taken from `WM_CLASS` over X11 and from the app id a Wayland compositor reports, which are the
+ * same string in practice: GTK apps name the class after their application id (`org.kde.kate`,
+ * `org.gnome.Nautilus`) and everything else uses its executable name (`firefox`, `thunar`). Kebab
+ * case dominates because that is what the `.desktop` file is called.
+ */
+const LINUX_APPS: Record<string, CompanionAppCategory> = {
+  'libreoffice-writer': C.Document,
+  'libreoffice-calc': C.Spreadsheet,
+  'libreoffice-impress': C.Presentation,
+  'thunderbird': C.Mail,
+  'org.gnome.geary': C.Mail,
+  'firefox': C.Browser,
+  'firefox-esr': C.Browser,
+  'org.mozilla.firefox': C.Browser,
+  'chromium': C.Browser,
+  'chromium-browser': C.Browser,
+  'google-chrome': C.Browser,
+  'google-chrome-stable': C.Browser,
+  'brave-browser': C.Browser,
+  'microsoft-edge': C.Browser,
+  'vivaldi-stable': C.Browser,
+  'opera': C.Browser,
+  'epiphany': C.Browser,
+  'org.gnome.epiphany': C.Browser,
+  'wechat': C.Chat,
+  'weixin': C.Chat,
+  'linux.wechat': C.Chat,
+  'qq': C.Chat,
+  'dingtalk': C.Chat,
+  'com.alibabainc.dingtalk': C.Chat,
+  'feishu': C.Chat,
+  'lark': C.Chat,
+  'telegram-desktop': C.Chat,
+  'org.telegram.desktop': C.Chat,
+  'discord': C.Chat,
+  'slack': C.Chat,
+  'nautilus': C.Files,
+  'org.gnome.nautilus': C.Files,
+  'thunar': C.Files,
+  'dolphin': C.Files,
+  'org.kde.dolphin': C.Files,
+  'nemo': C.Files,
+  'pcmanfm': C.Files,
+  'evince': C.Pdf,
+  'org.gnome.evince': C.Pdf,
+  'okular': C.Pdf,
+  'org.kde.okular': C.Pdf,
+  'zathura': C.Pdf,
+  'org.gnome.calendar': C.Calendar,
+  'korganizer': C.Calendar,
+  'obsidian': C.Notes,
+  'md.obsidian': C.Notes,
+  'notion': C.Notes,
+  'notion-app': C.Notes,
+  'joplin': C.Notes,
+  'org.gnome.notes': C.Notes,
+  'zoom': C.Meeting,
+  'us.zoom.zoom': C.Meeting,
+  'wemeetapp': C.Meeting,
+  'code': C.Code,
+  'code-oss': C.Code,
+  'vscodium': C.Code,
+  'cursor': C.Code,
+  'gnome-terminal': C.Code,
+  'org.gnome.terminal': C.Code,
+  'konsole': C.Code,
+  'org.kde.konsole': C.Code,
+  'xfce4-terminal': C.Code,
+  'alacritty': C.Code,
+  'kitty': C.Code,
+  'xterm': C.Code,
+  'keepassxc': C.Password,
+  'org.keepassxc.keepassxc': C.Password,
+  'bitwarden': C.Password,
+  '1password': C.Password,
+  'org.gnome.seahorse': C.Password,
+  'seahorse': C.Password,
+  'kwalletmanager': C.Password,
+  // Ourselves: the window class is the executable name on Linux, not the product name.
+  'lobsterai': C.Self,
+  'workbuddy': C.Self,
+};
+
 // Windows executable names, compared case-insensitively.
 const WINDOWS_APPS: Record<string, CompanionAppCategory> = {
   'winword.exe': C.Document,
@@ -196,13 +282,13 @@ export function knownCompanionAppId(appId: string | null | undefined): string | 
   if (!appId) return null;
   const id = normalizeCompanionAppId(appId);
   const has = (apps: Record<string, CompanionAppCategory>) => Object.prototype.hasOwnProperty.call(apps, id);
-  return has(MAC_APPS) || has(WINDOWS_APPS) ? id : null;
+  return has(MAC_APPS) || has(WINDOWS_APPS) || has(LINUX_APPS) ? id : null;
 }
 
 export function categorizeCompanionApp(appId: string | null | undefined): CompanionAppCategory {
   if (!appId) return C.Other;
   const id = normalizeCompanionAppId(appId);
-  const direct = MAC_APPS[id] ?? WINDOWS_APPS[id];
+  const direct = MAC_APPS[id] ?? WINDOWS_APPS[id] ?? LINUX_APPS[id];
   if (direct) return direct;
   const prefix = MAC_PREFIXES.find(([value]) => id.startsWith(value));
   return prefix ? prefix[1] : C.Other;
@@ -218,6 +304,14 @@ export const DEFAULT_SELECTION_EXCLUDED_APPS: readonly string[] = [
   'explorer.exe',
   'com.figma.desktop',
   'figma.exe',
+  // Linux file managers, for the same reason as Finder and Explorer.
+  'nautilus',
+  'org.gnome.nautilus',
+  'thunar',
+  'dolphin',
+  'org.kde.dolphin',
+  'nemo',
+  'pcmanfm',
   // Remote desktops forward the selection of another machine.
   'com.microsoft.rdc.macos',
   'com.microsoft.rdc.osx.beta',

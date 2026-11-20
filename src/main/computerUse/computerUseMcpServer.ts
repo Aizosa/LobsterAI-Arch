@@ -181,7 +181,20 @@ import { pathToFileURL } from 'node:url';
 
 const env = process.env;
 // LOBSTER_COMPUTER_USE_PLATFORM lets tests exercise the macOS bridge behavior elsewhere.
-const IS_MAC = (env.LOBSTER_COMPUTER_USE_PLATFORM || process.platform) === 'darwin';
+const PLATFORM = env.LOBSTER_COMPUTER_USE_PLATFORM || process.platform;
+const IS_MAC = PLATFORM === 'darwin';
+// Linux is not a variant of the Windows path. The three platforms differ in ways
+// that reach the tool surface:
+//   - macOS returns an accessibility outline and a screenshot with a scale;
+//     Windows returns a screenshot only. Linux reads AT-SPI, so it belongs with
+//     macOS on outline/limit behavior, but its capture is a compositor grab and
+//     has no scale parameter.
+//   - HID/pid delivery are macOS concepts; Linux input is XTest and lands on
+//     whatever has focus, so the delivery field is meaningless and gets dropped.
+// (Line comments, not a block comment: this file is embedded in a String.raw
+// template, where an apostrophe or backtick would end the literal.)
+const IS_LINUX = PLATFORM === 'linux';
+const HAS_A11Y_OUTLINE = IS_MAC || IS_LINUX;
 
 function requireEnv(name) {
   const value = env[name]?.trim();
@@ -289,7 +302,7 @@ const STRINGS = {
     subtitle: 'LobsterAI 需要操作你电脑上的应用',
     question: (app) => '允许 LobsterAI 操作「' + app + '」吗？',
     allow: '允许',
-    allowDescription: IS_MAC
+    allowDescription: IS_MAC || IS_LINUX
       ? '本次会话中允许查看并操作该应用。无法在后台完成的步骤会短暂接管鼠标和键盘，按 Esc 可随时停止。'
       : '本次会话中允许查看并操作该应用，按 Esc 可随时停止。',
     deny: '拒绝',
@@ -300,7 +313,7 @@ const STRINGS = {
     subtitle: 'LobsterAI wants to use an app on your computer',
     question: (app) => 'Allow LobsterAI to use "' + app + '"?',
     allow: 'Allow',
-    allowDescription: IS_MAC
+    allowDescription: IS_MAC || IS_LINUX
       ? 'Lets LobsterAI view and operate this app for this session. Steps that cannot run in the background briefly take over the mouse and keyboard. Press Esc to stop at any time.'
       : 'Lets LobsterAI view and operate this app for this session. Press Esc to stop at any time.',
     deny: 'Deny',
@@ -540,7 +553,7 @@ const ScreenshotIdSchema = z.string().optional().describe('screenshots[].id from
 const ScreenshotScaleSchema = z.number().min(0.1).max(1).optional()
   .describe('Screenshot scale in [0.1, 1]. 1 (default) returns the full screenshot; 0.5 returns half the width and height (about a quarter of the image tokens). Use a smaller scale to check coarse UI state and keep 1 to read small text or hit small targets. Coordinates are always pixels in the returned screenshot (pass its screenshotId), so a scaled screenshot needs no conversion.');
 const ExpectTextSchema = z.string().optional().describe('Optional text that should appear (or disappear with expect_gone) after the action; the call fails if it is not observed.');
-const DEFAULT_INCLUDE_TEXT = IS_MAC;
+const DEFAULT_INCLUDE_TEXT = HAS_A11Y_OUTLINE;
 
 function clientWindow(window) {
   if (!window || typeof window !== 'object') {
@@ -563,7 +576,72 @@ function forClient(args) {
   } else if (IS_MAC && next.delivery === 'pid') {
     next.delivery = 'background';
   }
+  if (IS_LINUX) {
+    // XTest injects into whatever has focus; there is no background delivery and
+    // no way to target a pid. Drop the field so the model is not asked to reason
+    // about a distinction that does not exist here.
+    delete next.delivery;
+  }
   return next;
+}
+
+/*
+ * Screenshot pixel -> absolute injection point, for platforms whose helper takes
+ * screen coordinates.
+ *
+ * The macOS helper receives window-relative point coordinates and does this
+ * mapping itself (it records pointWidth/scaleX per screenshot). The Linux helper
+ * injects through XTest, which needs absolute screen pixels, so the translation
+ * has to happen here — before the request is sent — using the origin the helper
+ * reported for the screenshot it cropped.
+ *
+ * Without this, a click at the centre of a 1920x1017 window screenshot would land
+ * at screen (960, 508) instead of (2640, 703) on a 3600x1275 display: wrong
+ * window, usually the one at the top-left.
+ */
+function applyScreenshotOrigin(args, screenshot, fields) {
+  if (!screenshot || screenshot.originX === undefined || screenshot.originY === undefined) {
+    return args;
+  }
+  const originX = Number(screenshot.originX) || 0;
+  const originY = Number(screenshot.originY) || 0;
+  if (originX === 0 && originY === 0) {
+    return args;
+  }
+  const next = { ...args };
+  for (const [xKey, yKey] of fields) {
+    if (typeof next[xKey] === 'number') {
+      next[xKey] = next[xKey] + originX;
+    }
+    if (typeof next[yKey] === 'number') {
+      next[yKey] = next[yKey] + originY;
+    }
+  }
+  // The helper no longer needs the screenshot bookkeeping once the coordinates
+  // are absolute.
+  delete next.screenshotId;
+  delete next.coordinate_space;
+  return next;
+}
+
+/** Remembers each screenshot id's reported geometry, per state. */
+const screenshotById = new Map();
+
+function rememberScreenshots(state) {
+  const screenshots = Array.isArray(state?.screenshots) ? state.screenshots : [];
+  for (const screenshot of screenshots) {
+    if (screenshot && typeof screenshot.id === 'string') {
+      screenshotById.set(screenshot.id, screenshot);
+      // Bound the map: screenshots go stale as soon as the UI changes, and a long
+      // session would otherwise accumulate base64 payloads forever.
+      if (screenshotById.size > 64) {
+        const oldest = screenshotById.keys().next().value;
+        if (oldest !== undefined) {
+          screenshotById.delete(oldest);
+        }
+      }
+    }
+  }
 }
 
 function assertCoordinateContext(args, toolName) {
@@ -844,6 +922,42 @@ registerTool('check_permissions', 'Check the operating system permissions Comput
   return successText(guided);
 });
 
+/*
+ * The three tools below exist only on Linux, and they are not decoration.
+ *
+ * On macOS and Windows "what can Computer Use do here" has one answer per
+ * platform. On Linux it depends on the desktop and the session protocol: the
+ * same click is XTest on KDE/X11, a portal RemoteDesktop request on
+ * KDE/Wayland, and something else again on GNOME or XFCE. Without a way to ask,
+ * the model has to discover the layout by failing at it — and on Wayland the
+ * first failure is a consent dialog nobody expected.
+ *
+ * Registering them only when the client provides them keeps the Windows and
+ * macOS tool surface byte-identical to before.
+ */
+if (typeof client.describe_environment === 'function') {
+  registerTool('describe_environment', 'Report this desktop and session: which desktop (KDE, GNOME, XFCE, ...), whether it is X11 or Wayland, which portal interfaces exist, and which backend every action will actually use. Call it once before planning a task on Linux, especially before anything that screenshots or types.', {}, async () => {
+    const report = await client.describe_environment();
+    return successText(typeof report === 'string' ? report : jsonText(report));
+  });
+}
+
+if (typeof client.request_input_access === 'function') {
+  registerTool('request_input_access', 'Ask the user for permission to send keyboard and mouse input. On a Wayland session this opens the desktop consent dialog; against X11 it is a no-op that returns immediately. Call it before the first click or keystroke on Wayland, so the wait happens where you can explain it to the user instead of inside an action call.', {}, async () => {
+    const result = await client.request_input_access();
+    return successText(typeof result === 'string' ? result : jsonText(result));
+  });
+}
+
+if (typeof client.set_accessibility === 'function') {
+  registerTool('set_accessibility', 'GNOME only: turn the toolkit-accessibility setting on or off. Applications only read it at startup, so the user must restart the app before it appears in the accessibility outline. Fails on desktops that do not use this setting.', {
+    enabled: z.boolean().optional().default(true).describe('Turn toolkit accessibility on (default) or off.'),
+  }, async (args) => {
+    const result = await client.set_accessibility({ enabled: args.enabled !== false });
+    return successText(result && typeof result === 'object' ? result : 'Accessibility setting updated.');
+  });
+}
+
 if (typeof client.request_permissions === 'function') {
   registerTool('request_permissions', 'Show the macOS permission prompts for LobsterAI and open the matching System Settings pane for any missing Accessibility or Screen Recording permission. Tell the user which switch to turn on, then wait for them.', {
     open_settings: z.boolean().optional().default(true).describe('Open System Settings to the missing permission pane.'),
@@ -854,12 +968,12 @@ if (typeof client.request_permissions === 'function') {
   });
 }
 
-registerTool('list_apps', IS_MAC
+registerTool('list_apps', HAS_A11Y_OUTLINE
   ? 'List running apps with their windows, plus installed apps (name and bundleId) that can be opened with launch_app.'
-  : 'List installed and recently used desktop apps, including open windows.', IS_MAC
+  : 'List installed and recently used desktop apps, including open windows.', HAS_A11Y_OUTLINE
   ? { include_installed: z.boolean().optional().default(true).describe('Include installed apps that are not running.') }
   : {}, async (args) => {
-  const result = IS_MAC ? await client.list_apps({ include_installed: args.include_installed !== false }) : await client.list_apps();
+  const result = HAS_A11Y_OUTLINE ? await client.list_apps({ include_installed: args.include_installed !== false }) : await client.list_apps();
   if (result && typeof result === 'object' && Array.isArray(result.running)) {
     result.running = result.running.filter(app => !isSelfApp(app.app, app.pid));
     for (const app of result.running) {
@@ -875,7 +989,9 @@ registerTool('list_apps', IS_MAC
 
 registerTool('launch_app', IS_MAC
   ? 'Open an app, or bring it forward if it is already running, and return its windows. Accepts an English or localized app name (for example "Notes" or "备忘录"), a bundle id, or an .app path.'
-  : 'Launch a desktop app by id, name, bundle path, or executable path.', IS_MAC
+  : IS_LINUX
+    ? 'Launch a desktop app by its id (for example "org.kde.kate"), display name, or executable path.'
+    : 'Launch a desktop app by id, name, bundle path, or executable path.', IS_MAC
   ? {
       app: z.string().min(1).describe('App name, bundle id, or .app path.'),
       activate: z.boolean().optional().describe('Bring the app to the front (default true). Pass false to open it in the background.'),
@@ -924,6 +1040,9 @@ const GetWindowStateSchema = {
   state_id: z.string().optional(),
 };
 // The macOS helper records each screenshot's pixel size, so scaled pixels map back to points.
+// The Linux helper crops a full-screen grab to the window rect and reports an
+// origin instead, so a scale factor would need a matching origin transform; the
+// field is omitted rather than accepted-and-ignored.
 if (IS_MAC) {
   GetWindowStateSchema.scale = ScreenshotScaleSchema;
 }
@@ -946,6 +1065,7 @@ registerTool('get_window_state', 'Capture a window: a screenshot (image) and an 
   }
   const state = await client.get_window_state(request);
   rememberWindows([state?.window]);
+  rememberScreenshots(state);
   return { content: stateToContent(state) };
 });
 
@@ -974,7 +1094,10 @@ registerTool('click', 'Click an element (element_index + state_id: presses butto
   if (args.x !== undefined || args.y !== undefined) {
     assertCoordinateContext(args, 'click');
   }
-  const result = await client.click(forClient(args));
+  const prepared = IS_LINUX
+    ? applyScreenshotOrigin(args, screenshotById.get(args.screenshotId), [['x', 'y']])
+    : args;
+  const result = await client.click(forClient(prepared));
   return successText(await applyExpectedText(args, result ?? 'Click completed.'));
 });
 
@@ -1019,7 +1142,10 @@ registerTool('scroll', 'Scroll a list or view by pixels (positive scrollY scroll
     throw new Error('scroll needs element_index (+ state_id) or x and y (+ screenshotId).');
   }
   assertCoordinateContext(args, 'scroll');
-  const result = await client.scroll(forClient(args));
+  const prepared = IS_LINUX
+    ? applyScreenshotOrigin(args, screenshotById.get(args.screenshotId), [['x', 'y']])
+    : args;
+  const result = await client.scroll(forClient(prepared));
   return successText(result && typeof result === 'object' ? result : 'Scroll completed.');
 });
 
@@ -1034,7 +1160,11 @@ registerTool('drag', 'Drag with the mouse between screenshot pixel coordinates (
   delivery: DeliverySchema.optional(),
 }, async (args) => {
   assertCoordinateContext(args, 'drag');
-  const result = await client.drag(forClient(args));
+  const prepared = IS_LINUX
+    ? applyScreenshotOrigin(args, screenshotById.get(args.screenshotId),
+        [['from_x', 'from_y'], ['to_x', 'to_y']])
+    : args;
+  const result = await client.drag(forClient(prepared));
   return successText(result && typeof result === 'object' ? result : 'Drag completed.');
 });
 

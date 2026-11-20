@@ -119,7 +119,7 @@ export function createCompanionWindow(env: CompanionWindowEnvironment, options: 
       preload: env.preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
       webSecurity: true,
       navigateOnDragDrop: false,
       spellcheck: false,

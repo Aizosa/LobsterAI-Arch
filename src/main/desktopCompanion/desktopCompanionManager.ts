@@ -338,7 +338,9 @@ export class DesktopCompanionManager {
       publish: () => this.publish(),
       openSettings: () => this.options.openSettings?.(),
       pointerKind: () => readWindowsNative(native => native.cursorKind()),
-      foregroundApp: () => readWindowsNative(native => native.foregroundProcessName()),
+      // The monitor covers macOS notifications and the Linux lookup. The direct Windows read stays
+      // as a fallback because a native call is immediate, while the poll only reports changes.
+      foregroundApp: () => this.foreground.currentAppId ?? readWindowsNative(native => native.foregroundProcessName()),
     }, this.quickAnswer, services.loadSelectionHook);
     this.permissionGuide = new CompanionPermissionGuideController({
       // Key-capable on macOS, like the orb: pressing a window that cannot become key half-activates the app.

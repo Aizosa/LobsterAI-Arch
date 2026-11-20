@@ -21,6 +21,7 @@ export const ComputerUseRuntimeTarget = {
   WindowsX64: 'win-x64',
   MacArm64: 'mac-arm64',
   MacX64: 'mac-x64',
+  LinuxX64: 'linux-x64',
 } as const;
 export type ComputerUseRuntimeTarget =
   typeof ComputerUseRuntimeTarget[keyof typeof ComputerUseRuntimeTarget];
@@ -28,6 +29,7 @@ export type ComputerUseRuntimeTarget =
 export const ComputerUseRuntimePlatform = {
   Windows: 'win32',
   MacOS: 'darwin',
+  Linux: 'linux',
 } as const;
 export type ComputerUseRuntimePlatform =
   typeof ComputerUseRuntimePlatform[keyof typeof ComputerUseRuntimePlatform];
@@ -42,6 +44,7 @@ export type ComputerUseRuntimeArch =
 export const ComputerUseRuntimeMode = {
   MacHelper: 'mac-helper',
   WindowsHelper: 'windows-helper',
+  LinuxHelper: 'linux-helper',
 } as const;
 export type ComputerUseRuntimeMode =
   typeof ComputerUseRuntimeMode[keyof typeof ComputerUseRuntimeMode];
@@ -98,6 +101,28 @@ export const ComputerUseRuntimes = {
     downloadUrl: 'https://ydschool-video.nosdn.127.net/1791804279073lobsterai-computer-use-runtime-mac-x64-0.2.2.zip',
     sha256: '01b0746b13e387860b873c11e9e86d625e334f3483f5e84e59e3d35c80dbd52b',
     sizeBytes: 221847,
+  },
+  /*
+   * Linux has no published archive: the helper is native code built from
+   * resources/computer-use-linux against the host's at-spi2-core, and ABI
+   * differences across distributions make a single prebuilt binary unreliable
+   * (glib and atspi sonames, plus the AT-SPI D-Bus version at runtime).
+   * downloadUrl stays null, which makes stageRuntimeArchive() require either a
+   * bundled archive from the package or LOBSTER_COMPUTER_USE_RUNTIME_ARCHIVE.
+   * `npm run dist:linux` produces that archive; a development checkout can
+   * point the env var at resources/computer-use-linux directly.
+   */
+  [ComputerUseRuntimeTarget.LinuxX64]: {
+    id: ComputerUseRuntimeId.BuiltIn,
+    version: '1.0.0',
+    platform: ComputerUseRuntimePlatform.Linux,
+    arch: ComputerUseRuntimeArch.X64,
+    target: ComputerUseRuntimeTarget.LinuxX64,
+    archiveName: 'lobsterai-computer-use-runtime-linux-x64-1.0.0.tar.gz',
+    // Annotated so `as const` does not narrow this to the null literal.
+    downloadUrl: null as string | null,
+    sha256: '',
+    sizeBytes: 0,
   },
 } as const satisfies Record<ComputerUseRuntimeTarget, ComputerUseRuntimeDescriptor>;
 
@@ -157,8 +182,9 @@ export interface ComputerUseRuntimeDownloadProgress {
 
 const RUNTIME_STATE_FILE = 'runtime.json';
 const COMPUTER_USE_RESOURCE_DIR = 'computer-use';
+const LINUX_HELPER_RESOURCE_DIR = 'computer-use-linux';
 const RUNTIME_ARCHIVE_ENV = 'LOBSTER_COMPUTER_USE_RUNTIME_ARCHIVE';
-const SUPPORTED_PLATFORM_LABEL = 'Windows x64 or macOS 13 or later';
+const SUPPORTED_PLATFORM_LABEL = 'Windows x64, macOS 13 or later, or Linux x64 (X11 or Wayland)';
 const STALE_STAGING_DIR_MS = 60 * 60 * 1000;
 const execFileAsync = promisify(execFile);
 
@@ -289,12 +315,20 @@ function readManifestRuntimeMode(
   descriptor: ComputerUseRuntimeDescriptor,
 ): ComputerUseRuntimeMode {
   const value = manifest?.mode;
-  if (value === ComputerUseRuntimeMode.MacHelper || value === ComputerUseRuntimeMode.WindowsHelper) {
+  if (
+    value === ComputerUseRuntimeMode.MacHelper
+    || value === ComputerUseRuntimeMode.WindowsHelper
+    || value === ComputerUseRuntimeMode.LinuxHelper
+  ) {
     return value;
   }
-  return descriptor.platform === ComputerUseRuntimePlatform.MacOS
-    ? ComputerUseRuntimeMode.MacHelper
-    : ComputerUseRuntimeMode.WindowsHelper;
+  if (descriptor.platform === ComputerUseRuntimePlatform.MacOS) {
+    return ComputerUseRuntimeMode.MacHelper;
+  }
+  if (descriptor.platform === ComputerUseRuntimePlatform.Linux) {
+    return ComputerUseRuntimeMode.LinuxHelper;
+  }
+  return ComputerUseRuntimeMode.WindowsHelper;
 }
 
 function readManifestRelativePath(
@@ -383,6 +417,33 @@ export function inspectComputerUseRuntime(
       paths: null,
       status: ComputerUseRuntimeStatus.Unsupported,
     };
+  }
+
+  /*
+   * A development checkout can run the helper straight out of
+   * resources/computer-use-linux, which is where `make` leaves the binary. That
+   * avoids a build+archive+install round trip for every source change. It is
+   * explicitly opt-in via env so a packaged app never picks up a stale in-tree
+   * directory that happens to ship in the asar.
+   */
+  const devRoot = process.env.LOBSTER_COMPUTER_USE_DEV_RUNTIME_DIR?.trim();
+  if (!rootDir && devRoot && isDirectory(devRoot)) {
+    const devMissing: string[] = [];
+    const devPaths = inspectHelperRuntime(
+      devRoot,
+      readRuntimeManifest(devRoot),
+      devMissing,
+      readManifestRuntimeMode(readRuntimeManifest(devRoot), descriptor),
+    );
+    if (devPaths) {
+      return { missing: [], paths: devPaths, status: ComputerUseRuntimeStatus.Installed };
+    }
+    // Fall through to the installed copy rather than failing outright: a
+    // half-built dev tree should not disable an already working install.
+    console.warn(
+      `[ComputerUseRuntime] dev runtime dir ${devRoot} is incomplete (${devMissing.join(', ')}); `
+      + 'falling back to the installed runtime',
+    );
   }
 
   const effectiveRootDir = rootDir ?? getComputerUseRuntimeRoot(descriptor);
@@ -517,6 +578,27 @@ async function extractRuntimeArchive(
     return;
   }
 
+  if (descriptor.archiveName.endsWith('.tar.gz')) {
+    // A .tar.gz keeps the helper's POSIX mode bits, which matters: the Electron
+    // main process spawns the helper directly and a ZIP round trip through
+    // extract-zip can drop the executable bit. tar also preserves the symlink
+    // the client module may use. --no-same-owner avoids writing root-owned files
+    // when an archive was built as root.
+    await execFileAsync('tar', [
+      '-xzf', archivePath,
+      '-C', destinationDir,
+      '--no-same-owner',
+      '--no-same-permissions',
+    ]);
+    // tar does not restore permissions with --no-same-permissions, so grant the
+    // helper its execute bit explicitly.
+    const helperPath = path.join(destinationDir, 'lobsterai-computer-use-linux');
+    if (isFile(helperPath)) {
+      await fs.promises.chmod(helperPath, 0o755);
+    }
+    return;
+  }
+
   await extractZip(archivePath, { dir: destinationDir });
 }
 
@@ -543,13 +625,26 @@ export async function installComputerUseRuntime(
     await stageRuntimeArchive(descriptor, archivePath, onProgress);
 
     const stat = await fs.promises.stat(archivePath);
-    if (stat.size !== descriptor.sizeBytes) {
+    // A descriptor with no published archive (Linux: built locally) has no
+    // expected size or digest. Skipping the check is correct there — the archive
+    // came from the package or from the user's own build, and there is nothing
+    // to compare against. For published runtimes both fields are set and the
+    // checks are mandatory.
+    const hasExpectedArchive = descriptor.sizeBytes > 0 && Boolean(descriptor.sha256);
+    if (hasExpectedArchive && stat.size !== descriptor.sizeBytes) {
       throw new Error('Computer Use runtime size verification failed');
     }
 
-    const actualSha256 = await sha256File(archivePath);
-    if (actualSha256 !== descriptor.sha256) {
-      throw new Error('Computer Use runtime checksum verification failed');
+    if (hasExpectedArchive) {
+      const actualSha256 = await sha256File(archivePath);
+      if (actualSha256 !== descriptor.sha256) {
+        throw new Error('Computer Use runtime checksum verification failed');
+      }
+    } else {
+      console.log(
+        `[ComputerUseRuntime] no published archive digest for ${descriptor.target}; `
+        + `installing from a locally supplied archive (${stat.size} bytes)`,
+      );
     }
 
     await fs.promises.rm(tempRoot, { recursive: true, force: true });

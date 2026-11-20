@@ -172,7 +172,7 @@
     "release:codown": "node scripts/release-codown.cjs",
     "codown:publish": "node scripts/codown-publish.cjs",
     "codown:verify": "node scripts/codown-publish.cjs --verify",
-    "predist:linux": "npm run openclaw:runtime:linux-x64",
+    "predist:linux": "npm run build:computer-use-linux && npm run openclaw:runtime:linux-x64",
     "dist:linux": "npm run build && npm run compile:electron && npm run build:skills && electron-builder --linux --config scripts/electron-builder-config.cjs",
     "clean:release": "rimraf release",
     "generate:tray-icons": "node scripts/generate-tray-icons.js",
@@ -209,7 +209,8 @@
     "regenerate:icon": "bash scripts/regenerate-mac-icon.sh",
     "fix:mac-icon": "bash scripts/fix-mac-icon-display.sh",
     "verify:word-licenses": "node scripts/word-third-party-notices.cjs",
-    "verify:sheet-licenses": "node scripts/sheet-third-party-notices.cjs"
+    "verify:sheet-licenses": "node scripts/sheet-third-party-notices.cjs",
+    "build:computer-use-linux": "node scripts/build-computer-use-linux.cjs"
   },
   "dependencies": {
     "@larksuite/openclaw-lark-tools": "~1.0.26",

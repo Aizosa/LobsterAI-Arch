@@ -78,4 +78,26 @@ describe('selection blocking', () => {
     expect(isCompanionSelectionBlocked('com.google.Chrome', [])).toBe(false);
     expect(isCompanionSelectionBlocked('com.google.Chrome', ['com.google.chrome'])).toBe(true);
   });
+
+  // Linux names an app by its window class, which arrives from WM_CLASS on X11 and from the
+  // compositor on Wayland. These are the values the exclusion lists have to match there.
+  test('recognizes LobsterAI and password managers by their Linux window class', () => {
+    expect(isCompanionSelectionBlocked('workbuddy', [])).toBe(true);
+    expect(isCompanionSelectionBlocked('lobsterai', [])).toBe(true);
+    expect(isCompanionSelectionBlocked('org.keepassxc.KeePassXC', [])).toBe(true);
+    expect(isCompanionSelectionBlocked('keepassxc', [])).toBe(true);
+  });
+
+  test('skips Linux file managers, where selecting a name is not reading text', () => {
+    expect(isCompanionSelectionBlocked('org.gnome.Nautilus', [])).toBe(true);
+    expect(isCompanionSelectionBlocked('thunar', [])).toBe(true);
+    expect(isCompanionSelectionBlocked('org.kde.dolphin', [])).toBe(true);
+  });
+
+  test('still reads selections in a Linux browser or editor', () => {
+    expect(isCompanionSelectionBlocked('firefox', [])).toBe(false);
+    expect(isCompanionSelectionBlocked('code', [])).toBe(false);
+    expect(categorizeCompanionApp('firefox')).toBe(CompanionAppCategory.Browser);
+    expect(categorizeCompanionApp('org.gnome.Terminal')).toBe(CompanionAppCategory.Code);
+  });
 });

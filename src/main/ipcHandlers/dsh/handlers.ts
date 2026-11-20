@@ -215,7 +215,7 @@ function openOrFocusWorkbench(url: string, title: string): void {
       partition: 'persist:dsh',
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
     },
   });
   workbenchWindow.on('closed', () => {

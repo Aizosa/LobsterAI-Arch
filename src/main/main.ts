@@ -671,6 +671,7 @@ import { type UsageTitleOutbox, UsageTitleSync } from './libs/usageTitleSync';
 import { getWebSearchBridgeFilePath, removeWebSearchBridgeFile, writeWebSearchBridgeFile } from './libs/webSearchBridgeFile';
 import { WebSearchHost } from './libs/webSearchHost';
 import { type LoopbackFirewallRepairResult, repairWindowsLoopbackFirewall } from './libs/windowsLoopbackFirewall';
+import { applyLinuxOzone } from './linuxOzone';
 import { getLogFilePath, initLogger } from './logger';
 import { type AskUserResponse, McpRuntime } from './mcp/mcpRuntime';
 import {
@@ -2087,6 +2088,11 @@ const savePngWithDialog = async (
   return { success: true, canceled: false, path: outputPath };
 };
 
+// Linux on Wayland: restart on XWayland if the process was not started there, because Chromium
+// fixes the Ozone platform before any of this runs. It comes first so the discarded process leaves
+// no user-data changes, logs or locks behind. A no-op on every other platform and session.
+applyLinuxOzone();
+
 const developmentLaunchContext = resolveDevelopmentLaunchContext({
   isPackaged: app.isPackaged,
   environment: process.env,
@@ -2197,6 +2203,25 @@ if (isLinux || isWindows) {
 }
 if (isLinux) {
   app.commandLine.appendSwitch('disable-dev-shm-usage');
+  // Linux 上硬件 GPU 进程会反复启动失败 (error_code=1002)，Chromium 随后调用
+  // IntentionallyCrashBrowserForUnusableGpuProcess() 主动 SIGTRAP 退出整个应用
+  // (日志: "GPU process isn't usable. Goodbye.")。
+  // 注意：不能用 --disable-gpu 一刀切——完全没有 GPU 进程时走纯软件合成，
+  // 在 X11/XWayland 下 damage 跟踪会坏（窗口残影），首帧也可能渲染不出（白屏）。
+  // 正确做法是让 GPU 进程用 SwiftShader 软件渲染正常启动：渲染管线完整，
+  // GPU 进程可用即不会触发上述 FATAL，只是不用硬件加速。
+  // 设置 LOBSTERAI_ENABLE_GPU=1 可强制启用硬件 GPU（用于驱动正常的机器）。
+  const forceHardwareGpu =
+    process.env.LOBSTERAI_ENABLE_GPU === '1' || process.env.LOBSTERAI_ENABLE_GPU === 'true';
+  if (forceHardwareGpu) {
+    // 硬件 GPU 路径：附带禁用 GPU 进程沙箱，尝试绕过 error_code=1002
+    app.commandLine.appendSwitch('disable-gpu-sandbox');
+  } else if (!disableGpu) {
+    // SwiftShader 软件渲染（默认）
+    app.commandLine.appendSwitch('use-gl', 'angle');
+    app.commandLine.appendSwitch('use-angle', 'swiftshader');
+    app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+  }
 }
 if (disableGpu) {
   app.commandLine.appendSwitch('disable-gpu');
@@ -15430,7 +15455,10 @@ if (!gotTheLock) {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true,
+        // 与全局 --no-sandbox 保持一致：KDE Wayland/XWayland 下开启 renderer
+        // namespace 沙箱会进入一个挂载表为空、根目录失效的破损 jail，共享内存
+        // 区域创建失败，合成帧无法回传，窗口首帧画不出来（黑屏/永不映射）。
+        sandbox: false,
         webSecurity: true,
         preload: PRELOAD_PATH,
         backgroundThrottling: false,
@@ -15474,7 +15502,7 @@ if (!gotTheLock) {
             webPreferences: {
               nodeIntegration: false,
               contextIsolation: true,
-              sandbox: true,
+              sandbox: false,
             },
           },
         };
@@ -15487,7 +15515,7 @@ if (!gotTheLock) {
       webPreferences.nodeIntegration = false;
       webPreferences.nodeIntegrationInSubFrames = false;
       webPreferences.contextIsolation = true;
-      webPreferences.sandbox = true;
+      webPreferences.sandbox = false;
       webPreferences.webSecurity = true;
       webPreferences.plugins = false;
       webPreferences.devTools = isDev;
@@ -15889,7 +15917,7 @@ if (!gotTheLock) {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true,
+        sandbox: false,
         partition: `data-migration-restore-${Date.now()}`,
       },
     });

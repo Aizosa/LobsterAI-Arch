@@ -86,7 +86,7 @@ describe('installComputerUseRuntime', () => {
 
     await expect(installComputerUseRuntime()).resolves.toEqual({
       success: false,
-      error: 'Computer Use runtime is only available on Windows x64 or macOS 13 or later.',
+      error: 'Computer Use runtime is only available on Windows x64, macOS 13 or later, or Linux x64 (X11 or Wayland).',
     });
   });
 });

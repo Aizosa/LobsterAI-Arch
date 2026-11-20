@@ -1,0 +1,149 @@
+# Maintainer: Aizosa <aizosa@localhost>
+#
+# Builds LobsterAI from source. This is the heavy variant: the app bundles its own OpenClaw
+# runtime, which has to be assembled before electron-builder can package anything, so expect a long
+# build and a few hundred megabytes of network traffic. If you already have an AppImage, use
+# PKGBUILD.bin instead — it finishes in seconds.
+#
+# makepkg's rule against network access in build() is bent here, as it is by every AUR package that
+# builds a Node application: `npm ci` and the runtime assembly both fetch from the network. Pin a
+# commit and build against a local cache if you need reproducibility.
+
+pkgname=lobsterai
+pkgver=2026.11.16
+pkgrel=1
+pkgdesc='AI desktop assistant with a floating selection toolbar'
+arch=('x86_64' 'aarch64')
+# No url and no license, on purpose. The source is netease-youdao/LobsterAI under MIT, but that
+# covers the source, not this package: it is a private local build, not distributed and not
+# licensed to anyone. Declaring MIT here would read as granting that licence over the binaries.
+depends=(
+  'gtk3'
+  'nss'
+  'libxss'
+  'libxtst'
+  'libdrm'
+  'mesa'
+  'alsa-lib'
+  'libcups'
+  'libpulse'
+  'libnotify'
+  # Electron's safeStorage keeps credentials in the keyring.
+  'libsecret'
+  'xdg-utils'
+  'libxkbcommon'
+  'wayland'
+)
+makedepends=(
+  'nodejs'
+  'npm'
+  'git'
+  # node-gyp rebuilds better-sqlite3 for Electron's ABI.
+  'python'
+)
+optdepends=(
+  'xdg-desktop-portal: screen sharing and remote input on Wayland'
+  'xdg-desktop-portal-kde: the KDE backend for the above'
+  'xdg-desktop-portal-gnome: the GNOME backend for the above'
+)
+# Electron ships prebuilt binaries that must not be stripped, and its helper processes rely on the
+# layout staying byte-identical.
+options=('!strip' '!debug')
+
+_upstream='https://ghproxy.net/https://github.com/Aizosa/LobsterAI-Linux'
+# Pin this to a commit for a reproducible build; a branch only means "whatever is there today".
+_commit='main'
+
+source=("git+${_upstream}.git#branch=${_commit}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd LobsterAI-Linux
+  # The app's own version, so the package version cannot drift from what it reports.
+  node -p "require('./package.json').version"
+}
+
+# BSD wc pads its numeric output to a fixed column width, where GNU wc does not. makepkg's own
+# dirsize() pipes `| wc -c` straight into .PKGINFO, so on a machine whose wc comes from BSD (a
+# coreutils-free setup, say) the file ends up with `size =        1614889059` and pacman cannot
+# parse the padding: `pacman -Qip` then reports an installed size of 0.
+#
+# Same hardlink-aware byte count as makepkg's, with the whitespace stripped. On a GNU userland the
+# strip is a no-op.
+dirsize() {
+  local file inode size
+  declare -A files
+
+  size=$( {
+    find . -type f -links 1 -exec cat {} + 2>/dev/null
+    while read -rd ' ' inode; do
+      IFS= read -r file
+      if [[ -z ${files[$inode]} ]]; then
+        files[$inode]=found
+        cat "$file"
+      fi
+    done < <(find . -type f -links +1 -exec stat -c '%i %n' {} + 2>/dev/null)
+  } | wc -c )
+
+  echo "${size//[[:space:]]/}"
+}
+
+build() {
+  cd LobsterAI-Linux
+
+  # Electron's own binary and electron-builder's helpers come from GitHub, which is unreliable from
+  # mainland China; the mirror serves the same files.
+  export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
+  export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
+  # Keep npm's cache inside $srcdir so a failed build does not leave a half-populated ~/.npm behind.
+  export npm_config_cache="$srcdir/npm-cache"
+  export npm_config_audit=false
+  export npm_config_fund=false
+
+  npm ci
+
+  # The bundled runtime the app runs agents on. Its output is gitignored, so it has to be built
+  # here; without it electron-builder fails on the missing extraResources directory.
+  npm run openclaw:runtime:linux-x64
+  npm run setup:python-runtime
+
+  npm run build
+  npm run compile:electron
+  npm run build:skills
+
+  # --dir gives the plain install tree. It lands in release/ because electron-builder.json sets
+  # directories.output. No AppImage is produced: pacman already provides everything the AppImage
+  # wrapper would.
+  npx electron-builder --dir --linux dir --config scripts/electron-builder-config.cjs
+}
+
+package() {
+  cd LobsterAI-Linux
+
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a release/linux-unpacked/. "$pkgdir/opt/$pkgname/"
+
+  # executableName in electron-builder.json is LobsterAI; expose it under the package name too.
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/$pkgname/LobsterAI" "$pkgdir/usr/bin/$pkgname"
+
+  install -d "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/$pkgname.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=LobsterAI
+Comment=AI desktop assistant with a floating selection toolbar
+Exec=/opt/$pkgname/LobsterAI %U
+Icon=$pkgname
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=LobsterAI
+DESKTOP
+  chmod 644 "$pkgdir/usr/share/applications/$pkgname.desktop"
+
+  local size
+  for size in 16 24 32 48 64 128 256 512 1024; do
+    install -Dm644 "build/icons/png/${size}x${size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/$pkgname.png"
+  done
+}

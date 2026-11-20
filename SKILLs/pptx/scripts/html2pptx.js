@@ -893,6 +893,29 @@ async function extractSlideData(page) {
   });
 }
 
+/**
+ * Launches the browser used to render a slide.
+ *
+ * System Chrome comes first on every platform. It is what the macOS path has always used, and it
+ * means the skill works on a machine where playwright's own browser was never downloaded - roughly
+ * 300 MB that the app does not ship. Only when no Chrome is installed does it fall back to
+ * playwright's bundled Chromium, which must then have been fetched with
+ * `npx playwright install chromium`.
+ *
+ * Any launch failure is treated as "no Chrome here": a genuine problem with Chrome (a broken
+ * profile, a missing shared library) fails the fallback as well and surfaces from there, so nothing
+ * is swallowed.
+ */
+async function launchBrowser(launchOptions) {
+  try {
+    return await chromium.launch({ ...launchOptions, channel: 'chrome' });
+  } catch (error) {
+    const reason = String(error && error.message).split('\n')[0];
+    console.warn(`[html2pptx] System Chrome unavailable (${reason}); falling back to playwright's bundled Chromium`);
+    return chromium.launch(launchOptions);
+  }
+}
+
 async function html2pptx(htmlFile, pres, options = {}) {
   const {
     tmpDir = process.env.TMPDIR || '/tmp',
@@ -900,13 +923,8 @@ async function html2pptx(htmlFile, pres, options = {}) {
   } = options;
 
   try {
-    // Use Chrome on macOS, default Chromium on Unix
     const launchOptions = { env: { TMPDIR: tmpDir } };
-    if (process.platform === 'darwin') {
-      launchOptions.channel = 'chrome';
-    }
-
-    const browser = await chromium.launch(launchOptions);
+    const browser = await launchBrowser(launchOptions);
 
     let bodyDimensions;
     let slideData;
