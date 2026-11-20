@@ -10,9 +10,9 @@
 # commit and build against a local cache if you need reproducibility.
 
 pkgname=lobsterai
-pkgver=2026.11.16
+pkgver=2026.11.20
 pkgrel=1
-pkgdesc='AI desktop assistant with a floating selection toolbar'
+pkgdesc='AI desktop assistant with a floating selection toolbar for Arch'
 arch=('x86_64' 'aarch64')
 # No url and no license, on purpose. The source is netease-youdao/LobsterAI under MIT, but that
 # covers the source, not this package: it is a private local build, not distributed and not
