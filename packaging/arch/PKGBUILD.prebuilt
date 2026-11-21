@@ -1,0 +1,85 @@
+# CI-oriented PKGBUILD: packages the electron-builder --dir output tree.
+#
+# Unlike the source PKGBUILD (which drives npm/electron-builder itself), this
+# one expects a fully built tree to already exist at $srcdir/release — the
+# GitHub Actions workflow assembles that directory and rewrites __PKGVER__
+# before invoking makepkg. Keeps CI and local builds on the same packaging
+# code path (same desktop file, same icon layout, same dirsize() override).
+pkgname=lobsterai-bin
+pkgver=__PKGVER__
+pkgrel=1
+pkgdesc='All-scenario office assistant Agent for Arch'
+arch=('x86_64')
+# Private local build, not distributed, not licensed to anyone.
+depends=('gtk3' 'nss' 'libxss' 'libxtst' 'libdrm' 'mesa' 'alsa-lib' 'libcups' 'libpulse' 'libnotify' 'libsecret' 'xdg-utils' 'libxkbcommon' 'wayland')
+options=('!strip' '!debug')
+
+_BUILT="$srcdir/release"
+_ICONS="$srcdir/icons"
+
+source=()
+sha256sums=()
+
+build() {
+  : # the tree is built by CI before makepkg runs
+}
+
+# BSD wc pads its numeric output to a fixed column width, where GNU wc does
+# not; makepkg's own dirsize() pipes `| wc -c` straight into .PKGINFO, which
+# then reports an installed size of 0. Same hardlink-aware byte count as
+# makepkg's, with the whitespace stripped (no-op on GNU userland).
+dirsize() {
+	local file inode size
+	declare -A files
+
+	size=$( {
+		find . -type f -links 1 -exec cat {} + 2>/dev/null
+		while read -rd ' ' inode; do
+			IFS= read -r file
+			if [[ -z ${files[$inode]} ]]; then
+				files[$inode]=found
+				cat "$file"
+			fi
+		done < <(find . -type f -links +1 -exec stat -c '%i %n' {} + 2>/dev/null)
+	} | wc -c )
+
+	echo "${size//[[:space:]]/}"
+}
+
+package() {
+  install -d "$pkgdir/opt/$pkgname"
+  cp -a "$_BUILT/." "$pkgdir/opt/$pkgname/"
+
+  install -d "$pkgdir/usr/bin"
+  ln -s "/opt/$pkgname/LobsterAI" "$pkgdir/usr/bin/lobsterai"
+
+  install -d "$pkgdir/usr/share/applications"
+  cat > "$pkgdir/usr/share/applications/$pkgname.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=LobsterAI
+Comment=AI desktop assistant with a floating selection toolbar
+# Launch directly with X11/Ozone, bypassing both the GPU FATAL in the first process
+# on native Wayland and the SIGSEGV when the Ozone relaunch path shuts down the old
+# instance (linuxOzone won't restart a second time once it sees an explicit --ozone-platform).
+Exec=/opt/$pkgname/LobsterAI --ozone-platform=x11 %U
+Icon=$pkgname
+Terminal=false
+Categories=Utility;Development;
+# WM_CLASS of the Electron window is all-lowercase "lobsterai" (from package.json
+# name). KDE taskbar matching is case-sensitive; "LobsterAI" never matches, so
+# the right-click menu on the taskbar icon was empty.
+StartupWMClass=lobsterai
+# KWin only authorizes restricted D-Bus interfaces listed in the caller's
+# .desktop (KDE bug 446628). Listing ScreenShot2 lets the in-app helper reach
+# the KWin frame-capture channel as a Wayland capture fallback behind the
+# portal Screenshot path.
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
+DESKTOP
+
+  local icon_size
+  for icon_size in 16 24 32 48 64 128 256 512 1024; do
+    install -Dm644 "$_ICONS/${icon_size}x${icon_size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/$pkgname.png"
+  done
+}

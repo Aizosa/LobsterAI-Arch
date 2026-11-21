@@ -1,0 +1,105 @@
+# Build the LobsterAI Linux app tree and package it as an Arch .pkg.tar.zst.
+#
+# Pipeline mirrors the local manual build (vite -> compile:electron -> skills ->
+# electron-builder --dir -> makepkg on the prebuilt tree). The OpenClaw runtime
+# is compiled from source because it is not tracked in git; optional plugins
+# that live on NetEase's intranet registry are skipped by design (WARNING).
+#
+# Triggers:
+# - workflow_dispatch (manual, any branch)
+# - tag pushes (v*): the package is additionally attached to a GitHub release
+name: build-package
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-package
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/archlinux/archlinux:base-devel
+    timeout-minutes: 300
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - name: Install toolchain packages
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git python \
+            at-spi2-core json-glib cairo glib2 \
+            libx11 libxtst libei \
+            github-cli
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Pin npm and pnpm to engine-compatible versions
+        run: npm install -g npm@11.21.3 pnpm@12.1.0
+
+      - name: Show tool versions
+        run: node -v && npm -v && pnpm -v
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build computer-use Linux helper
+        run: npm run build:computer-use-linux
+
+      - name: Build OpenClaw runtime (linux-x64)
+        run: npm run openclaw:runtime:linux-x64
+
+      - name: Build renderer and main bundles
+        run: npm run build
+
+      - name: Compile electron main/preload
+        run: npm run compile:electron
+
+      - name: Build skills
+        run: npm run build:skills
+
+      - name: electron-builder --dir
+        run: npx electron-builder --linux --dir --config scripts/electron-builder-config.cjs
+
+      - name: makepkg
+        run: |
+          set -euo pipefail
+          PKGVER=$(node -p "require('./package.json').version")
+          STAGE="$GITHUB_WORKSPACE/pkgbuild"
+          mkdir -p "$STAGE/release" "$STAGE/icons"
+          cp -a release/linux-unpacked/. "$STAGE/release/"
+          cp -a build/icons/png/*.png "$STAGE/icons/"
+          cp packaging/arch/PKGBUILD.prebuilt "$STAGE/PKGBUILD"
+          sed -i "s/__PKGVER__/$PKGVER/" "$STAGE/PKGBUILD"
+          useradd -m builder
+          chown -R builder:builder "$STAGE"
+          su builder -c "cd $STAGE && makepkg -f -d --noconfirm"
+          ls -la "$STAGE"/*.pkg.tar.zst
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lobsterai-bin-arch-package
+          path: pkgbuild/*.pkg.tar.zst
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach package to GitHub release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes --fail-on-no-commits || true
+          gh release upload "$GITHUB_REF_NAME" pkgbuild/*.pkg.tar.zst --clobber
