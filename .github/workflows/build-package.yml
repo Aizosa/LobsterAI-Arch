@@ -77,9 +77,11 @@ jobs:
           set -euo pipefail
           PKGVER=$(node -p "require('./package.json').version")
           STAGE="$GITHUB_WORKSPACE/pkgbuild"
-          mkdir -p "$STAGE/release" "$STAGE/icons"
-          cp -a release/linux-unpacked/. "$STAGE/release/"
-          cp -a build/icons/png/*.png "$STAGE/icons/"
+          # makepkg's $srcdir is $startdir/src: put the prebuilt tree and icons
+          # there so package() can reference them as "$srcdir/release" etc.
+          mkdir -p "$STAGE/src/release" "$STAGE/src/icons"
+          cp -a release/linux-unpacked/. "$STAGE/src/release/"
+          cp -a build/icons/png/*.png "$STAGE/src/icons/"
           cp packaging/arch/PKGBUILD.prebuilt "$STAGE/PKGBUILD"
           sed -i "s/__PKGVER__/$PKGVER/" "$STAGE/PKGBUILD"
           useradd -m builder

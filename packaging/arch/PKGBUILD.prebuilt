@@ -14,8 +14,10 @@ arch=('x86_64')
 depends=('gtk3' 'nss' 'libxss' 'libxtst' 'libdrm' 'mesa' 'alsa-lib' 'libcups' 'libpulse' 'libnotify' 'libsecret' 'xdg-utils' 'libxkbcommon' 'wayland')
 options=('!strip' '!debug')
 
-_BUILT="$srcdir/release"
-_ICONS="$srcdir/icons"
+# $srcdir is only defined inside build()/package(): makepkg sources this file
+# once up front to read metadata, at which point srcdir is still empty, so the
+# release tree and icons are referenced directly inside package() below rather
+# than through top-level variables.
 
 source=()
 sha256sums=()
@@ -48,7 +50,7 @@ dirsize() {
 
 package() {
   install -d "$pkgdir/opt/$pkgname"
-  cp -a "$_BUILT/." "$pkgdir/opt/$pkgname/"
+  cp -a "$srcdir/release/." "$pkgdir/opt/$pkgname/"
 
   install -d "$pkgdir/usr/bin"
   ln -s "/opt/$pkgname/LobsterAI" "$pkgdir/usr/bin/lobsterai"
@@ -79,7 +81,7 @@ DESKTOP
 
   local icon_size
   for icon_size in 16 24 32 48 64 128 256 512 1024; do
-    install -Dm644 "$_ICONS/${icon_size}x${icon_size}.png" \
+    install -Dm644 "$srcdir/icons/${icon_size}x${icon_size}.png" \
       "$pkgdir/usr/share/icons/hicolor/${icon_size}x${icon_size}/apps/$pkgname.png"
   done
 }
