@@ -30,7 +30,6 @@ jobs:
     timeout-minutes: 300
     env:
       NODE_OPTIONS: --max-old-space-size=6144
-      LC_ALL: zh_CN.UTF-8
     steps:
       - name: Install toolchain packages
         run: |
