@@ -235,8 +235,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   const isMac = window.electron.platform === 'darwin';
   const showHeaderRow = !isWindows;
   const isWindowFullscreen = useIsWindowFullscreen();
-  // macOS hides the traffic lights in full screen; take their slot instead of leaving a gap.
-  const alignHeaderStart = isMac && isWindowFullscreen;
+  // macOS keeps the icons on the right so they never sit under the traffic
+  // lights (which hide in full screen — only then is start-alignment safe).
+  // Linux has no left-side window controls (buttons live top-right of the
+  // window), so start-aligning just reclaims the otherwise empty slot.
+  const alignHeaderStart = isMac ? isWindowFullscreen : true;
   const showLoginPromo = !hideLogin && !isAuthLoading && !isLoggedIn && !accountConnectionState;
   const shouldShowLoginPromoTip = showLoginPromo && showLoginPromoTip;
   const batchSelectableKeySet = useMemo(

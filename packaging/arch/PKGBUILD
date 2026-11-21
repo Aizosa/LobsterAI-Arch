@@ -137,7 +137,7 @@ Exec=/opt/$pkgname/LobsterAI %U
 Icon=$pkgname
 Terminal=false
 Categories=Utility;Development;
-StartupWMClass=LobsterAI
+StartupWMClass=lobsterai
 DESKTOP
   chmod 644 "$pkgdir/usr/share/applications/$pkgname.desktop"
 

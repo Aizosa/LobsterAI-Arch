@@ -58,6 +58,22 @@ describe('lock owner decisions', () => {
       ...f.identity, args: undefined, executablePath: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'wbem', 'WmiPrvSE.exe'),
     }, f.options, now)).toBe(LockOwnerDecision.Unrelated);
   });
+  test('classifies a Linux orphan gateway (jiffies identity, systemd parent) for reclaim', () => {
+    const f = fixture();
+    // Real Linux lock payloads: startTime is /proc starttime in clock ticks.
+    const payload = { ...f.payload, startTime: 1046948, role: 'gateway', port: 18789 };
+    const identity: WindowsProcessIdentity = {
+      status: WindowsProcessStatus.Running, pid: payload.pid, startTime: 1046948,
+      creationTime: '1737400000000', executablePath: f.options.executablePath,
+      args: [f.options.executablePath, path.join(f.options.runtimeRoot, 'gateway-launcher.cjs')],
+      parentPid: 596, parentAlive: false,
+    };
+    expect(classifyLockOwner(payload, identity, f.options, now)).toBe(LockOwnerDecision.Orphan);
+    // The live instance still owns its gateway: parent alive → protected.
+    expect(classifyLockOwner(payload, { ...identity, parentAlive: true }, f.options, now)).toBe(LockOwnerDecision.Active);
+    // Epoch/jiffy unit mismatches are never treated as the same process.
+    expect(classifyLockOwner(payload, { ...identity, startTime: 1737400000000 }, f.options, now)).toBe(LockOwnerDecision.Reused);
+  });
   test('protects external OpenClaw runtimes and unsupported maintenance roles', () => {
     const f = fixture();
     expect(classifyLockOwner(f.payload, { ...f.identity, args: ['node.exe', 'C:/other/openclaw.mjs', 'doctor'] }, f.options, now)).toBe(LockOwnerDecision.Active);

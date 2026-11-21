@@ -601,6 +601,7 @@ import {
   resolveCoworkSessionIdByOpenClawSessionKey,
   resolveSubagentRequesterCoworkSessionId,
 } from './libs/openclawLocalSessionResolver';
+import { reclaimOrphanedGatewayStateLocks } from './libs/openclawLockRecovery';
 import { OPENCLAW_LOOPBACK_STATE_FILE, OpenClawLoopbackService, OpenClawLoopbackState } from './libs/openclawLoopbackState';
 import {
   addMemoryEntry,
@@ -3941,6 +3942,19 @@ const repairOpenClawGatewayState = (): Promise<OpenClawGatewayRepairResult> => {
             LOBSTERAI_NPM_BIN_DIR: npmBinDir,
           },
         };
+        // An orphaned gateway (left behind by a crashed instance, reaped by
+        // init/systemd/launchd) blocks the native ownership check below. Stop
+        // verified orphans first; live or healthy gateways stay protected.
+        const lockReclaim = await reclaimOrphanedGatewayStateLocks({
+          stateDir: repairOptions.stateDir, configPath: repairOptions.configPath,
+          runtimeRoot: repairOptions.runtimeRoot, executablePath: process.execPath,
+          backupDir: backupPath, env: repairOptions.env,
+        });
+        if (lockReclaim.stoppedPids.length > 0) {
+          console.log(`[OpenClawRepair] stopped orphaned gateway owner(s): ${lockReclaim.stoppedPids.join(', ')}`);
+        } else if (lockReclaim.blockedReason) {
+          console.warn(`[OpenClawRepair] gateway lock reclaim blocked: ${lockReclaim.blockedReason}`);
+        }
         await runOpenClawCompatibilityRepair({ ...repairOptions, phase: OpenClawRepairPhase.LockRecovery });
         await runOpenClawCompatibilityRepair({ ...repairOptions, phase: OpenClawRepairPhase.Snapshot });
         await runOpenClawDoctorRepair(repairOptions);

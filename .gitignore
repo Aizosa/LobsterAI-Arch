@@ -64,3 +64,14 @@ logs/
 
 # Local build, verification, and acceptance evidence
 /artifacts/
+
+# Local build/test scratch (WorkBuddy sessions)
+/.tmp/
+/.tools/
+# Stray bundle outputs written to repo root by misconfigured builds
+/main.js
+
+# Computer-use Linux runtime artifacts (source is tracked, binaries are not)
+resources/computer-use/*.tar.gz
+resources/computer-use-linux/lobsterai-computer-use-linux
+resources/computer-use-linux/*.png
