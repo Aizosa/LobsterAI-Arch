@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 300
     env:
       NODE_OPTIONS: --max-old-space-size=6144
+      LC_ALL: zh_CN.UTF-8
     steps:
       - name: Install toolchain packages
         run: |
@@ -37,7 +38,7 @@ jobs:
             git python \
             at-spi2-core json-glib cairo glib2 \
             libx11 libxtst libei \
-            github-cli
+            github-cli wayland libevdev
 
       - uses: actions/checkout@v4
 
