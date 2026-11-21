@@ -77,6 +77,23 @@ describe.each([false, true])('MCP Python env (managed launch: %s)', managed => {
     }
   });
 
+  test('forwards desktop session env so native helpers reach AT-SPI and the display', async () => {
+    vi.stubEnv('DBUS_SESSION_BUS_ADDRESS', 'unix:path=/run/user/1000/bus');
+    vi.stubEnv('DISPLAY', ':0');
+    vi.stubEnv('WAYLAND_DISPLAY', 'wayland-1');
+    vi.stubEnv('XDG_RUNTIME_DIR', '/run/user/1000');
+    vi.stubEnv('PRIVATE_PARENT_TOKEN', 'must-not-inherit');
+    const environments = await getLaunchEnvironments(makeRuntime(managed));
+
+    for (const env of environments) {
+      expect(env.DBUS_SESSION_BUS_ADDRESS).toBe('unix:path=/run/user/1000/bus');
+      expect(env.DISPLAY).toBe(':0');
+      expect(env.WAYLAND_DISPLAY).toBe('wayland-1');
+      expect(env.XDG_RUNTIME_DIR).toBe('/run/user/1000');
+      expect(env).not.toHaveProperty('PRIVATE_PARENT_TOKEN');
+    }
+  });
+
   test('inherits explicit parent encodings through the MCP whitelist boundary', async () => {
     vi.stubEnv(PythonEncodingEnv.Utf8, '0');
     vi.stubEnv(PythonEncodingEnv.IoEncoding, 'gbk:backslashreplace');

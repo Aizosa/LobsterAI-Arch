@@ -1,6 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { expect, test } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 
 import {
   CONVERSATION_SEARCH_MATCH_LIMIT,
@@ -8,6 +8,12 @@ import {
   ConversationSearchStatus,
 } from './conversationSearch';
 import CoworkConversationSearch from './CoworkConversationSearch';
+
+// The component reads window.electron.platform for the Linux trim; this suite runs in the node SSR
+// environment, which has no window, so stub the minimal global the component touches.
+beforeEach(() => {
+  vi.stubGlobal('window', { electron: { platform: 'linux' } });
+});
 
 test.each([
   ConversationSearchStatus.Idle,

@@ -36,6 +36,12 @@ const AgentBrowserTabStrip: React.FC<AgentBrowserTabStripProps> = ({
     });
   }, [selectedPageId]);
 
+  // On Linux the window frame is hidden but the window manager still paints its
+  // own caption buttons (minimize / maximize / close) in the top-right corner
+  // over the client area. Reserve the same three-button gutter the Windows
+  // title bar uses so tabs and the new-tab button are not drawn under them.
+  const isLinux = window.electron.platform === 'linux';
+
   return (
     <div className="flex h-9 shrink-0 items-end gap-1 border-b border-border bg-surface px-2 pt-1">
       <div
@@ -97,6 +103,7 @@ const AgentBrowserTabStrip: React.FC<AgentBrowserTabStripProps> = ({
       >
         <PlusIcon className="h-4 w-4" />
       </button>
+      {isLinux ? <div aria-hidden className="w-[100px] shrink-0" /> : null}
     </div>
   );
 };

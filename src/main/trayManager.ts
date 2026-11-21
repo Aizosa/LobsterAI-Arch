@@ -146,6 +146,11 @@ export function createTray(getWindow: () => BrowserWindow | null, actions?: Tray
   tray.setToolTip(resolveTrayTooltip());
 
   contextMenu = buildContextMenu(getWindow);
+  // On Linux the StatusNotifierItem host (e.g. KDE plasmashell) opens the menu over D-Bus,
+  // which only sees the menu assigned through setContextMenu; 'right-click' + popUpContextMenu
+  // alone leaves the icon with a dead right-click. Assign it once here and refresh it in
+  // updateTrayMenu whenever the template is rebuilt.
+  tray.setContextMenu(contextMenu);
 
   clickHandler = () => {
     if (trayReminder.count > 0) {
@@ -173,6 +178,7 @@ export function createTray(getWindow: () => BrowserWindow | null, actions?: Tray
 export function updateTrayMenu(getWindow: () => BrowserWindow | null): void {
   if (!tray) return;
   contextMenu = buildContextMenu(getWindow);
+  tray.setContextMenu(contextMenu);
   tray.setToolTip(resolveTrayTooltip());
 }
 

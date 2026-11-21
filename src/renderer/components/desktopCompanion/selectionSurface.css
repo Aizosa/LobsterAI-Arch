@@ -113,6 +113,9 @@
 .sel-menu-item:active { background: var(--s-fill-strong); }
 .sel-menu-item[data-secondary="true"] { color: var(--s-ink-2); }
 .sel-menu-item[data-secondary="true"] svg { color: var(--s-ink-3); }
+.sel-menu-item:disabled { color: var(--s-ink-3); cursor: default; }
+.sel-menu-item:disabled svg { color: var(--s-ink-3); }
+.sel-menu-item:disabled:hover, .sel-menu-item:disabled:active { background: transparent; }
 
 /* ── Cards ─────────────────────────────────────────────── */
 

@@ -21,6 +21,23 @@ import { showAppQuitDialog } from './appQuitDialog';
 /** kv store key for the Settings switch; missing means enabled. */
 export const APP_QUIT_CONFIRMATION_STORE_KEY = 'app_quit_confirmation_enabled';
 
+/**
+ * A prompt that never settles (its renderer failed to launch and the fallback
+ * dialog never answered) must not trap the process alive. Past this ceiling the
+ * caller treats it as a failed prompt and honors the quit.
+ */
+const PROMPT_TIMEOUT_MS = 30_000;
+
+function settleOrTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${PROMPT_TIMEOUT_MS}ms`)), PROMPT_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 export const AppQuitRequestVerdict = {
   /**
    * Skip the prompt: a programmatic quit or OS shutdown already decided, or
@@ -156,12 +173,24 @@ export async function showAppQuitConfirmation(
       translate: t,
       hasUnsafeMarkdownEdits: unsafeMarkdownEdits,
     });
-    const { response } = await showAppQuitDialog(options, ownerWindow).catch(error => {
-      console.error('[AppQuit] failed to open quit confirmation, using native dialog:', error);
-      return ownerWindow && !ownerWindow.isDestroyed() && ownerWindow.isVisible() && !ownerWindow.isMinimized()
-        ? dialog.showMessageBox(ownerWindow, options)
-        : dialog.showMessageBox(options);
-    });
+    const showNative = () => (ownerWindow && !ownerWindow.isDestroyed() && ownerWindow.isVisible() && !ownerWindow.isMinimized()
+      ? dialog.showMessageBox(ownerWindow, options)
+      : dialog.showMessageBox(options));
+    const { response } = await settleOrTimeout(
+      process.platform === 'linux'
+        // The custom frameless/transparent dialog spawns a second renderer. On a
+        // KDE XWayland session that extra renderer repeatedly fails to launch
+        // (render-process-gone launch-failed exitCode 1002, the same GPU/launch
+        // failure the first process hits), so the prompt never appears or hangs
+        // on a stale window. The native modal needs no extra renderer and stays
+        // reliable here.
+        ? showNative()
+        : showAppQuitDialog(options, ownerWindow).catch(error => {
+          console.error('[AppQuit] failed to open quit confirmation, using native dialog:', error);
+          return showNative();
+        }),
+      'Quit confirmation prompt',
+    );
     return isAppQuitConfirmed(response);
   };
   const warnedAboutUnsafeEdits = hasUnsafeMarkdownEdits();

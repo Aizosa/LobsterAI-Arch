@@ -41,6 +41,7 @@ const CoworkConversationSearch: React.FC<CoworkConversationSearchProps> = ({
   onClose,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const isLinux = window.electron.platform === 'linux';
   const hasQuery = query.trim().length > 0;
   const hasResults = resultCount > 0;
   const shouldShowNavigation = hasQuery && status === ConversationSearchStatus.Ready;
@@ -80,7 +81,9 @@ const CoworkConversationSearch: React.FC<CoworkConversationSearchProps> = ({
 
   return (
     <div
-      className="non-draggable relative -mr-1 top-1 z-40 w-[340px] min-w-[min(240px,calc(100vw_-_24px))] max-w-[calc(100vw_-_24px)] self-start overflow-hidden rounded-3xl border border-border/80 bg-surface-overlay text-foreground shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:shadow-[0_12px_34px_rgba(0,0,0,0.42)]"
+      className={`non-draggable relative top-1 z-40 w-[340px] min-w-[min(240px,calc(100vw_-_24px))] max-w-[calc(100vw_-_24px)] self-start overflow-hidden rounded-3xl border border-border/80 bg-surface-overlay text-foreground shadow-[0_10px_30px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:shadow-[0_12px_34px_rgba(0,0,0,0.42)] ${
+        isLinux ? 'mr-[100px]' : '-mr-1'
+      }`}
       role="search"
       data-cowork-conversation-search="true"
     >

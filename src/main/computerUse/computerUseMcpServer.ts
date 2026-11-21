@@ -543,6 +543,9 @@ const WindowSchema = z.object({
   title: z.string().optional(),
   bundleId: z.string().optional(),
   pid: z.number().int().optional(),
+  // Linux XWayland counterpart handle; lets the helper reuse the same window
+  // for EWMH requests and the XTest fallback without re-matching by pid/title.
+  x11_window: z.number().int().optional(),
 }).describe('A window object returned by list_windows, list_apps, launch_app, or get_window_state. Pass it back unchanged.');
 const StateIdSchema = z.string().optional().describe('state_id from the get_window_state call that produced element_index.');
 const ElementIndexSchema = z.number().int().nonnegative();
@@ -562,6 +565,15 @@ function clientWindow(window) {
   const value = { app: window.app, id: window.id };
   if (window.title) {
     value.title = window.title;
+  }
+  if (typeof window.pid === 'number') {
+    value.pid = window.pid;
+  }
+  if (typeof window.bundleId === 'string') {
+    value.bundleId = window.bundleId;
+  }
+  if (typeof window.x11_window === 'number') {
+    value.x11_window = window.x11_window;
   }
   return value;
 }
@@ -694,6 +706,9 @@ function windowSummary(window) {
   }
   if (typeof window?.pid === 'number') {
     value.pid = window.pid;
+  }
+  if (typeof window?.x11_window === 'number') {
+    value.x11_window = window.x11_window;
   }
   if (window?.bounds) {
     value.bounds = window.bounds;

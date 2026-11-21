@@ -16,6 +16,7 @@ import { WindowsCursorKind } from './windowsNative';
 
 const trusted = vi.hoisted(() => ({ value: true }));
 const focused = vi.hoisted(() => ({ value: null as unknown }));
+const waylandNoInput = vi.hoisted(() => ({ value: false }));
 
 vi.mock('electron', () => ({
   BrowserWindow: { getFocusedWindow: () => focused.value },
@@ -36,6 +37,7 @@ type SelectionHost = import('./companionSelection').SelectionHost;
 class FakeHook extends EventEmitter {
   static FilterMode = { INCLUDE_LIST: 1, EXCLUDE_LIST: 2 };
   static PositionLevel = { SEL_FULL: 3 };
+  static DisplayProtocol = { UNKNOWN: 0, X11: 1, WAYLAND: 2 };
   static last: FakeHook | null = null;
   config: Record<string, unknown> | undefined;
   start(config?: Record<string, unknown>) { this.config = config; FakeHook.last = this; return true; }
@@ -43,6 +45,7 @@ class FakeHook extends EventEmitter {
   cleanup() {}
   setGlobalFilterMode = vi.fn(() => true);
   getCurrentSelection = vi.fn((): unknown => null);
+  linuxGetEnvInfo() { return waylandNoInput.value ? { displayProtocol: 2, hasInputDeviceAccess: false } : null; }
 }
 
 class FakeWindow extends EventEmitter {
@@ -157,6 +160,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   trusted.value = true;
   focused.value = null;
+  waylandNoInput.value = false;
   preferences = { ...DEFAULT_DESKTOP_COMPANION_PREFERENCES, enabled: true };
 });
 
@@ -667,6 +671,31 @@ describe('selection toolbar', () => {
     controller.handleCommand({ type: DesktopCompanionSelectionCommandType.ExcludeApp });
     expect(preferences.selectionExcludedApps).toEqual(['com.tencent.xinWeChat']);
     expect(win.visible).toBe(false);
+  });
+
+  test('"hide in this app" does nothing when the current app could not be identified', () => {
+    const controller = create({ foregroundApp: () => null });
+    select('selected words', '');
+    vi.advanceTimersByTime(200);
+    controller.handleCommand({ type: DesktopCompanionSelectionCommandType.ExcludeApp });
+    expect(preferences.selectionExcludedApps).toEqual([]);
+    expect(win.visible).toBe(true);
+    controller.dispose();
+  });
+
+  test('closes promptly once the PRIMARY selection is cleared on a Wayland session without input access', () => {
+    waylandNoInput.value = true;
+    const controller = create({ foregroundApp: () => null });
+    select('selected words', '');
+    vi.advanceTimersByTime(200);
+    expect(win.visible).toBe(true);
+    // The selection was cleared: a direct read finds no text. One tick is kept as a margin against a
+    // transient read failure, so the first read does not drop the toolbar yet.
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(true);
+    vi.advanceTimersByTime(300);
+    expect(win.visible).toBe(false);
+    controller.dispose();
   });
 
   test('pausing stops the hook for an hour', () => {

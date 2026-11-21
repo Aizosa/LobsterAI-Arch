@@ -8,6 +8,7 @@ import path from 'path';
 
 import {
   ComputerUseKitId,
+  ComputerUseKitMetadata,
 } from '../../../shared/computerUse/constants';
 import type {
   InstalledKitRecord,
@@ -27,6 +28,7 @@ import {
   promptComputerUseAccessibilityPermission,
   removeComputerUseSkillArtifacts,
   resolveBundledComputerUseKitArchivePath,
+  writeComputerUseLinuxSkill,
 } from '../../computerUse/computerUseKit';
 import {
   getComputerUseSupportedPlatformLabel,
@@ -289,7 +291,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       const computerUseBundleDescriptor = isComputerUseKit
         ? getCurrentComputerUseKitBundleDescriptor()
         : null;
-      if (isComputerUseKit && !computerUseBundleDescriptor) {
+      if (isComputerUseKit && !isComputerUseKitSupportedPlatform()) {
         throw new Error(`Computer Use kit is only available on ${getComputerUseSupportedPlatformLabel()}.`);
       }
       if (computerUseBundleDescriptor && bundleUrl !== computerUseBundleDescriptor.bundle) {
@@ -300,40 +302,61 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         return skinPackInstallResult;
       }
 
-      // 1. Download zip
-      tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-kit-'));
-      const buffer = computerUseBundleDescriptor
-        ? await loadComputerUseKitBundle(computerUseBundleDescriptor)
-        : await downloadBuffer(bundleUrl);
+      // Linux ships its helper inside the app and has no download bundle; the
+      // bundle download/extract/collect steps below only run when a descriptor exists.
+      let skillDirs: string[] = [];
       if (computerUseBundleDescriptor) {
+        // 1. Download zip
+        tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-kit-'));
+        const buffer = await loadComputerUseKitBundle(computerUseBundleDescriptor);
         if (buffer.length !== computerUseBundleDescriptor.sizeBytes) {
           throw new Error('Computer Use kit bundle size verification failed');
         }
         if (sha256Buffer(buffer) !== computerUseBundleDescriptor.sha256) {
           throw new Error('Computer Use kit bundle checksum verification failed');
         }
-      }
-      const zipPath = path.join(tempRoot, 'kit-bundle.zip');
-      const extractRoot = path.join(tempRoot, 'extracted');
-      fs.writeFileSync(zipPath, buffer);
-      fs.mkdirSync(extractRoot, { recursive: true });
+        const zipPath = path.join(tempRoot, 'kit-bundle.zip');
+        const extractRoot = path.join(tempRoot, 'extracted');
+        fs.writeFileSync(zipPath, buffer);
+        fs.mkdirSync(extractRoot, { recursive: true });
 
-      // 2. Extract
-      await extractZip(zipPath, { dir: extractRoot });
+        // 2. Extract
+        await extractZip(zipPath, { dir: extractRoot });
 
-      // Handle single-directory wrapper (e.g. zip contains one root folder)
-      let sourceRoot = extractRoot;
-      const extractedEntries = fs.readdirSync(extractRoot)
-        .map(entry => path.join(extractRoot, entry))
-        .filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
-      if (extractedEntries.length === 1) {
-        sourceRoot = extractedEntries[0];
-      }
+        // Handle single-directory wrapper (e.g. zip contains one root folder)
+        let sourceRoot = extractRoot;
+        const extractedEntries = fs.readdirSync(extractRoot)
+          .map(entry => path.join(extractRoot, entry))
+          .filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+        if (extractedEntries.length === 1) {
+          sourceRoot = extractedEntries[0];
+        }
 
-      // 3. Discover skill directories
-      const skillDirs = collectSkillDirs(sourceRoot);
-      if (skillDirs.length === 0) {
-        throw new Error('No skills found in kit bundle (no SKILL.md detected)');
+        // 3. Discover skill directories
+        skillDirs = collectSkillDirs(sourceRoot);
+        if (skillDirs.length === 0) {
+          throw new Error('No skills found in kit bundle (no SKILL.md detected)');
+        }
+      } else if (!isComputerUseKit) {
+        // Generic third-party kit: download its bundle the usual way.
+        tempRoot = fs.mkdtempSync(path.join(app.getPath('temp'), 'lobsterai-kit-'));
+        const buffer = await downloadBuffer(bundleUrl);
+        const zipPath = path.join(tempRoot, 'kit-bundle.zip');
+        const extractRoot = path.join(tempRoot, 'extracted');
+        fs.writeFileSync(zipPath, buffer);
+        fs.mkdirSync(extractRoot, { recursive: true });
+        await extractZip(zipPath, { dir: extractRoot });
+        let sourceRoot = extractRoot;
+        const extractedEntries = fs.readdirSync(extractRoot)
+          .map(entry => path.join(extractRoot, entry))
+          .filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+        if (extractedEntries.length === 1) {
+          sourceRoot = extractedEntries[0];
+        }
+        skillDirs = collectSkillDirs(sourceRoot);
+        if (skillDirs.length === 0) {
+          throw new Error('No skills found in kit bundle (no SKILL.md detected)');
+        }
       }
 
       if (isComputerUseKit) {
@@ -355,6 +378,18 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       const installedSkillIds: string[] = [];
       const installedSkillMetadata: Record<string, KitSkillMetadata> = {};
       const sourceSkillMetadata = normalizeKitSkillMetadataList(params.skillList);
+
+      if (isComputerUseKit && !computerUseBundleDescriptor) {
+        // Linux: no downloadable bundle. The helper runtime was staged above,
+        // and the built-in skill copy is written directly into the SKILLs root.
+        const skillId = writeComputerUseLinuxSkill();
+        installedSkillIds.push(skillId);
+        installedSkillMetadata[skillId] = {
+          id: skillId,
+          name: ComputerUseKitMetadata.SkillName,
+          description: ComputerUseKitMetadata.SkillDescription,
+        };
+      }
 
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));

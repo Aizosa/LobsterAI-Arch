@@ -62,6 +62,10 @@ interface MenuItem {
   run: () => void;
   /** Settings-like entries sit below a divider in a quieter color. */
   secondary?: boolean;
+  /** The entry cannot be acted on — e.g. the current app could not be identified. */
+  disabled?: boolean;
+  /** Shown as a tooltip explaining why the entry is disabled. */
+  disabledHint?: string;
 }
 
 export default function SelectionSurface({ state }: { state: DesktopCompanionState }) {
@@ -310,7 +314,14 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
     const tools = visible.map(toolItem);
     const menu: MenuItem[] = [
       ...overflow.map(toolItem),
-      { key: 'exclude', icon: NoSymbolIcon, label: t('desktopCompanionSelectionExclude'), run: () => command({ type: DesktopCompanionSelectionCommandType.ExcludeApp }), secondary: true },
+      {
+        key: 'exclude', icon: NoSymbolIcon, label: t('desktopCompanionSelectionExclude'), secondary: true,
+        // Wayland does not expose other clients' identities: with no app id there is nothing to add
+        // to the exclusion list, so show the entry greyed out instead of a click that does nothing.
+        disabled: !selection.appId,
+        disabledHint: selection.appId ? undefined : t('desktopCompanionSelectionExcludeUnavailable'),
+        run: () => command({ type: DesktopCompanionSelectionCommandType.ExcludeApp }),
+      },
       { key: 'settings', icon: Cog6ToothIcon, label: t('desktopCompanionSelectionSettings'), run: () => command({ type: DesktopCompanionSelectionCommandType.Settings }), secondary: true },
     ];
     const menuOpen = selection.menuOpen;
@@ -342,9 +353,11 @@ export default function SelectionSurface({ state }: { state: DesktopCompanionSta
           </div>
           {menuOpen && (
             <div className="sel-menu" role="menu">
-              {menu.map(({ key, icon: ItemIcon, label, run: onClick, secondary }, index) => (
+              {menu.map(({ key, icon: ItemIcon, label, run: onClick, secondary, disabled, disabledHint }, index) => (
                 <div key={key} className="sel-menu-group" data-divided={secondary && !menu[index - 1]?.secondary}>
-                  <button type="button" role="menuitem" className="sel-menu-item" data-secondary={secondary} onClick={onClick}>
+                  <button type="button" role="menuitem" className="sel-menu-item" data-secondary={secondary}
+                    disabled={disabled} title={disabledHint} aria-disabled={disabled || undefined}
+                    onClick={disabled ? undefined : onClick}>
                     <ItemIcon /><span>{label}</span>
                   </button>
                 </div>

@@ -56,6 +56,9 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
   const addressFocusedRef = useRef(false);
   const syncFrameRef = useRef<number | null>(null);
   const browserMenuButtonRef = useRef<HTMLButtonElement>(null);
+  // Linux WM caption buttons paint over the top-right corner of the hidden-frame
+  // client area; keep the address row's menu button clear of that gutter.
+  const isLinux = window.electron.platform === 'linux';
 
   const selectedTab = state?.tabs.find(tab => tab.pageId === state.selectedPageId);
   const credentialLoginBusy = state?.credentialLogin?.status === BrowserCredentialLoginStatus.AwaitingApproval
@@ -345,6 +348,7 @@ const AgentBrowserInAppPanel: React.FC<AgentBrowserInAppPanelProps> = ({
         >
           <EllipsisVerticalIcon className="h-4 w-4" />
         </button>
+        {isLinux ? <div aria-hidden className="w-[100px] shrink-0" /> : null}
       </div>
 
       {state?.error ? (

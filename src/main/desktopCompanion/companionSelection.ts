@@ -13,6 +13,7 @@ import {
 } from '../../shared/desktopCompanion/analytics';
 import {
   categorizeCompanionApp,
+  CompanionAppCategory,
   DEFAULT_SELECTION_EXCLUDED_APPS,
   isCompanionSelectionBlocked,
   SELECTION_CLIPBOARD_APPS,
@@ -85,6 +86,11 @@ const GESTURE_LATENCY_MAX_MS = 10_000;
 const POINTER_WATCH_MS = 300;
 const POINTER_AWAY_TICKS = 4;
 const POINTER_ANCHOR_SLOP = 220;
+// Wayland's data-control protocol only announces a new offer: clearing the PRIMARY selection
+// leaves the old toolbar on screen until the pointer moves away. The watchdog re-reads the
+// selection instead; two consecutive reads with no text close it promptly, while a transient
+// read failure alone cannot drop a still-open toolbar.
+const SELECTION_GONE_TICKS = 2;
 // selection-hook's SelectionMethod and PositionLevel values (index.d.ts), named for analytics.
 const SELECTION_METHODS: Record<number, CompanionSelectionMethod> = {
   1: CompanionSelectionMethod.Uia,
@@ -323,6 +329,8 @@ export class CompanionSelectionController {
   private pointerTimer: ReturnType<typeof setInterval> | undefined;
   /** Consecutive watchdog ticks that found the pointer away from both the selection and the toolbar. */
   private pointerAwayTicks = 0;
+  /** Consecutive watchdog ticks that could read no text from the PRIMARY selection. */
+  private selectionGoneTicks = 0;
   /** The pointer at the current left press was the I-beam or an app's own cursor (Windows). */
   private pressOverText = false;
   /** When the last selecting gesture ended, until a selection claims it. */
@@ -658,6 +666,7 @@ export class CompanionSelectionController {
     clearInterval(this.pointerTimer);
     this.pointerTimer = undefined;
     this.pointerAwayTicks = 0;
+    this.selectionGoneTicks = 0;
   }
 
   private tickPointerWatch(): void {
@@ -671,8 +680,17 @@ export class CompanionSelectionController {
     // cannot see.
     if (selection.menuOpen) {
       this.pointerAwayTicks = 0;
+      this.selectionGoneTicks = 0;
       return;
     }
+    // The compositor never reports a cleared selection, so re-read the PRIMARY selection. Once its
+    // text is gone the toolbar belongs to nothing anymore and should close immediately, without
+    // waiting for the pointer to drift outside the anchor's tolerance.
+    if (!this.readCurrentSelection()) {
+      if (++this.selectionGoneTicks >= SELECTION_GONE_TICKS) this.hide();
+      return;
+    }
+    this.selectionGoneTicks = 0;
     const cursor = screen.getCursorScreenPoint();
     if (rectContains(win.getBounds(), cursor) || this.nearSelection(cursor)) {
       this.pointerAwayTicks = 0;
@@ -740,7 +758,17 @@ export class CompanionSelectionController {
     // application stands in for it, which is the same app in practice because selecting text does
     // not move focus. Without this the exclusion lists would match nothing there, and the toolbar
     // would open over a password manager's window.
-    const appId = data.programName || this.host.foregroundApp?.() || '';
+    const programAppId = data.programName || '';
+    let appId = programAppId || this.host.foregroundApp?.() || '';
+    if (!programAppId) {
+      // On an XWayland session the X11 active-window lookup can report our own
+      // XWayland surface even when a native Wayland application holds focus, so
+      // a Self match from the fallback lookup does not prove the selection came
+      // from our window. Mask it to unknown and let the focused-window heuristic
+      // below tell our own window apart, instead of hiding the toolbar over
+      // another application. A program name the hook read directly is trusted.
+      appId = categorizeCompanionApp(appId) === CompanionAppCategory.Self ? '' : appId;
+    }
     if (isCompanionSelectionBlocked(appId, this.host.preferences().selectionExcludedApps)) return;
     // Still unknown — no program name and no frontmost app to ask. The one case left to tell apart
     // is our own text: anything selected in a LobsterAI window is something the user is already

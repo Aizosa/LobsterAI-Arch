@@ -1430,6 +1430,7 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
+  const isLinux = window.electron.platform === 'linux';
   const currentSession = useSelector(selectCurrentSession);
   const [modelSwitchNotice, setModelSwitchNotice] = useState<{ sessionId: string; messageId: string } | null>(null);
   useEffect(() => {
@@ -6569,6 +6570,9 @@ const CoworkSessionDetail: React.FC<CoworkSessionDetailProps> = ({
               />
             )}
           </button>
+          {/* Linux WM caption buttons paint over the top-right corner of the hidden-frame
+              client area; keep the header actions clear of that gutter (measured strip ≈95px). */}
+          {isLinux ? <div aria-hidden className="w-[100px] shrink-0" /> : null}
           </div>
         )}
       </div>

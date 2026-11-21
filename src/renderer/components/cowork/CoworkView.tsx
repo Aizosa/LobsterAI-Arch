@@ -122,6 +122,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
   const dispatch = useDispatch();
   const isMac = window.electron.platform === 'darwin';
   const isWindows = window.electron.platform === 'win32';
+  const isLinux = window.electron.platform === 'linux';
   const [isInitialized, setIsInitialized] = useState(false);
   const [openClawStatus, setOpenClawStatus] = useState<OpenClawEngineStatus | null>(null);
   const [isRestartingGateway, setIsRestartingGateway] = useState(false);
@@ -845,7 +846,7 @@ const CoworkView: React.FC<CoworkViewProps> = ({
           </div>
         )}
       </div>
-      <div className="non-draggable flex items-center">
+      <div className={`non-draggable flex items-center ${isLinux ? 'mr-[100px]' : ''}`}>
         {!isEnterpriseAccount && startupCreditEntry.available && (
           <button
             type="button"

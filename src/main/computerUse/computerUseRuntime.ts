@@ -341,7 +341,12 @@ function readManifestRelativePath(
   }
 
   const normalized = value.trim().replace(/\\/g, '/');
-  if (!normalized || path.isAbsolute(normalized)) {
+  // A flat archive keeps the helper, client module and manifest at its root;
+  // the manifest marks that package root with ".", which is valid here.
+  if (!normalized || normalized === '.') {
+    return '';
+  }
+  if (path.isAbsolute(normalized)) {
     return null;
   }
 
@@ -363,19 +368,18 @@ function inspectHelperRuntime(
   const helperRelativePath = readManifestRelativePath(manifest, 'helper');
   const clientModuleRelativePath = readManifestRelativePath(manifest, 'clientModule');
 
-  if (!runtimePackageRootRelativePath) {
+  if (runtimePackageRootRelativePath === null) {
     missing.push(`${RUNTIME_STATE_FILE}:runtimePackageRoot`);
   }
-  if (!helperRelativePath) {
+  if (helperRelativePath === null) {
     missing.push(`${RUNTIME_STATE_FILE}:helper`);
   }
-  if (!clientModuleRelativePath) {
+  if (clientModuleRelativePath === null) {
     missing.push(`${RUNTIME_STATE_FILE}:clientModule`);
   }
 
-  const runtimePackageRoot = runtimePackageRootRelativePath
-    ? path.join(rootDir, runtimePackageRootRelativePath)
-    : '';
+  // An empty relative path means the package root is the archive root itself.
+  const runtimePackageRoot = path.join(rootDir, runtimePackageRootRelativePath ?? '');
   const helperExePath = helperRelativePath ? path.join(rootDir, helperRelativePath) : '';
   const clientModulePath = clientModuleRelativePath
     ? path.join(rootDir, clientModuleRelativePath)

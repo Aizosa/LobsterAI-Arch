@@ -43,6 +43,32 @@ const getPackagedNpmBinDir = (): string => (app.isPackaged
   ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'npm', 'bin')
   : '');
 
+/**
+ * Session/display variables that a native desktop helper needs to reach the
+ * AT-SPI accessibility bus, the XTest/Wayland input backends and the portal
+ * services. The shim env intentionally does not inherit the parent process
+ * wholesale, but without these the helper's `atspi_init()` cannot locate the
+ * session bus and reports "AT-SPI2 is unavailable" even though at-spi2-core
+ * is installed. Only an explicit, non-secret allowlist is copied; server
+ * overrides still win.
+ */
+const SESSION_ENV_FORWARD_KEYS = [
+  'DBUS_SESSION_BUS_ADDRESS',
+  'XDG_RUNTIME_DIR',
+  'DISPLAY',
+  'XAUTHORITY',
+  'WAYLAND_DISPLAY',
+  'XDG_SESSION_TYPE',
+  'XDG_SESSION_DESKTOP',
+  'XDG_CURRENT_DESKTOP',
+  'KDE_FULL_SESSION',
+  'XDG_DATA_DIRS',
+  'XDG_CONFIG_DIRS',
+  'LANG',
+  'LC_ALL',
+  'LC_MESSAGES',
+] as const;
+
 /** Runtime env omitted by the MCP inheritance allowlist; server overrides win. */
 function buildMcpShimEnv(...overrides: (Record<string, string> | undefined)[]): Record<string, string> {
   let shimEnv: Record<string, string> = {
@@ -51,6 +77,12 @@ function buildMcpShimEnv(...overrides: (Record<string, string> | undefined)[]): 
   const npmBinDir = getPackagedNpmBinDir();
   if (npmBinDir) {
     shimEnv.LOBSTERAI_NPM_BIN_DIR = npmBinDir;
+  }
+  for (const key of SESSION_ENV_FORWARD_KEYS) {
+    const value = process.env[key];
+    if (value !== undefined && value !== '') {
+      shimEnv[key] = value;
+    }
   }
   for (const override of overrides) {
     shimEnv = { ...shimEnv, ...override };
@@ -536,7 +568,13 @@ export class McpRuntime {
       })
       : null;
     if (computerUseServer) {
-      resolved.push(computerUseServer);
+      // Route the built-in helper through the same shim env as other stdio
+      // servers: the native Linux binary needs the session D-Bus/display vars
+      // (AT-SPI, XTest, portal), which the raw built-in env otherwise omits.
+      resolved.push({
+        ...computerUseServer,
+        env: buildMcpShimEnv(computerUseServer.env),
+      });
       builtInCount++;
     }
 

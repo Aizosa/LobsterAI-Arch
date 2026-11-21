@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('electron', () => ({
   app: {
@@ -14,6 +17,7 @@ vi.mock('electron', () => ({
 
 import {
   ComputerUseRuntimeArch,
+  ComputerUseRuntimeId,
   ComputerUseRuntimePlatform,
   ComputerUseRuntimes,
   ComputerUseRuntimeStatus,
@@ -88,5 +92,56 @@ describe('installComputerUseRuntime', () => {
       success: false,
       error: 'Computer Use runtime is only available on Windows x64, macOS 13 or later, or Linux x64 (X11 or Wayland).',
     });
+  });
+});
+
+describe('flat Linux runtime archive', () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function stageFlatLinuxRuntime(): string {
+    const descriptor = ComputerUseRuntimes[ComputerUseRuntimeTarget.LinuxX64];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lobsterai-cu-flat-'));
+    tmpDirs.push(root);
+    fs.writeFileSync(
+      path.join(root, 'runtime.json'),
+      JSON.stringify({
+        id: descriptor.id,
+        version: descriptor.version,
+        platform: descriptor.platform,
+        arch: descriptor.arch,
+        mode: 'linux-helper',
+        // The flat Linux archive keeps the helper and client module at the
+        // archive root; the manifest marks that with ".".
+        runtimePackageRoot: '.',
+        helper: 'lobsterai-computer-use-linux',
+        clientModule: 'client/index.mjs',
+      }),
+    );
+    fs.writeFileSync(path.join(root, 'lobsterai-computer-use-linux'), '#!/bin/sh\n');
+    fs.mkdirSync(path.join(root, 'client'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'client', 'index.mjs'), 'export {};\n');
+    return root;
+  }
+
+  test('accepts runtimePackageRoot "." as the archive root', () => {
+    setHost(ComputerUseRuntimePlatform.Linux, ComputerUseRuntimeArch.X64);
+    const root = stageFlatLinuxRuntime();
+    const descriptor = ComputerUseRuntimes[ComputerUseRuntimeTarget.LinuxX64];
+
+    const inspection = inspectComputerUseRuntime(root, descriptor);
+
+    expect(inspection.status).toBe(ComputerUseRuntimeStatus.Installed);
+    expect(inspection.missing).toEqual([]);
+    expect(inspection.paths?.runtimePackageRoot).toBe(root);
+    expect(inspection.paths?.helperExePath).toBe(
+      path.join(root, 'lobsterai-computer-use-linux'),
+    );
+    expect(inspection.paths?.clientModulePath).toBe(path.join(root, 'client', 'index.mjs'));
   });
 });

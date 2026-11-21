@@ -45,6 +45,7 @@ import {
 
 const MAC_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacArm64];
 const MAC_X64_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.MacX64];
+const LINUX_X64_RUNTIME = ComputerUseRuntimes[ComputerUseRuntimeTarget.LinuxX64];
 
 function setProcessTarget(runtime: { platform: string; arch: string }): void {
   Object.defineProperty(process, 'platform', { value: runtime.platform });
@@ -155,6 +156,16 @@ describe('Computer Use kit bundle catalog', () => {
     expect(isComputerUseKitSupportedPlatform()).toBe(true);
     expect(kit.version).toBe(MAC_X64_RUNTIME.version);
     expect(kit.skills?.bundle).toBe(ComputerUseKitBundle.MacOS);
+  });
+
+  test('offers the kit on Linux even though its helper ships inside the app', () => {
+    setProcessTarget(LINUX_X64_RUNTIME);
+
+    expect(getCurrentComputerUseKitBundleDescriptor()).toBeNull();
+    expect(isComputerUseKitSupportedPlatform()).toBe(true);
+
+    const kit = buildComputerUseMarketplaceKit() as { version?: string };
+    expect(kit.version).toBe(LINUX_X64_RUNTIME.version);
   });
 
   test('hides the kit on macOS versions the helper does not support', () => {

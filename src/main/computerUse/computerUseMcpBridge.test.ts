@@ -287,7 +287,7 @@ describe('Computer Use MCP bridge (macOS behavior)', () => {
     expect(bridge.askRequests[0].questions?.[0].question).toBe('允许 LobsterAI 操作「Notes」吗？');
     expect(bridge.askRequests[0].questions?.[0].options?.map(option => option.label)).toEqual(['允许', '拒绝']);
     const click = bridge.clientCalls().find(call => call.method === 'click');
-    expect(click?.params.window).toEqual({ app: 'Notes', id: 11, title: 'Groceries' });
+    expect(click?.params.window).toEqual({ app: 'Notes', id: 11, title: 'Groceries', pid: 101, bundleId: 'com.apple.Notes' });
   });
 
   test('stops when the user denies an app and never forwards the action', async () => {
