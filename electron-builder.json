@@ -290,6 +290,32 @@
         ]
       },
       {
+        "from": "vendor/dsh-runtime/current",
+        "to": "dsh",
+        "filter": [
+          "**/*",
+          "!**/*.map",
+          "!**/*.d.ts",
+          "!**/*.d.cts",
+          "!**/*.d.mts",
+          "!**/README.md",
+          "!**/README",
+          "!**/readme.md",
+          "!**/CHANGELOG.md",
+          "!**/CHANGELOG",
+          "!**/HISTORY.md",
+          "!**/.eslintrc*",
+          "!**/.prettierrc*",
+          "!**/tsconfig.json",
+          "!**/tsconfig.*.json",
+          "!**/*.test.*",
+          "!**/*.spec.*",
+          "!**/tests/**",
+          "!**/test/**",
+          "!**/__tests__/**"
+        ]
+      },
+      {
         "from": "resources/computer-use",
         "to": "computer-use",
         "filter": [

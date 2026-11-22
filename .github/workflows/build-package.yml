@@ -60,6 +60,9 @@ jobs:
       - name: Build OpenClaw runtime (linux-x64)
         run: npm run openclaw:runtime:linux-x64
 
+      - name: Build dsh runtime (linux-x64)
+        run: npm run dsh:runtime:linux-x64
+
       - name: Build renderer and main bundles
         run: npm run build
 
