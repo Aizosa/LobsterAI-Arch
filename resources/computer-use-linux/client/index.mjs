@@ -48,6 +48,35 @@ const KNOWN_METHODS = [
   'type_text',
 ];
 
+/**
+ * The helper wraps every reply as an MCP-style envelope
+ * `{ content: [{ type: "text", text: "<JSON or plain message>" }] }`. The
+ * bridge above this client expects the bare result object (or plain string)
+ * that macOS and Windows helpers return directly, so this layer — the only one
+ * that knows the wire format — unwraps the envelope here. A reply that is
+ * already bare passes through unchanged; a text part that is not JSON falls
+ * back to its raw string.
+ */
+function unwrapResult(result) {
+  if (
+    result && typeof result === 'object' && !Array.isArray(result)
+    && Array.isArray(result.content)
+  ) {
+    const texts = result.content
+      .filter((item) => item && item.type === 'text' && typeof item.text === 'string')
+      .map((item) => item.text);
+    if (texts.length > 0) {
+      const joined = texts.join('\n');
+      try {
+        return JSON.parse(joined);
+      } catch {
+        return joined;
+      }
+    }
+  }
+  return result;
+}
+
 export class ComputerUseClient {
   /** @param {{ helperPath: string, timeoutMs?: number, env?: Object }} options */
   constructor(options) {
@@ -155,7 +184,7 @@ export class ComputerUseClient {
       entry.reject(new Error(`${entry.method}: ${detail}${tail}`));
       return;
     }
-    entry.resolve(message.result ?? null);
+    entry.resolve(unwrapResult(message.result ?? null));
   }
 
   /**
@@ -219,7 +248,11 @@ export class ComputerUseClient {
   // ------------------------------------------------------------ typed surface
 
   async list_windows() {
-    return this.request('list_windows');
+    const result = await this.request('list_windows');
+    // The Linux helper wraps the array as { windows: [...] }; the bridge
+    // expects the bare array it receives from the macOS/Windows helpers.
+    if (Array.isArray(result)) return result;
+    return Array.isArray(result?.windows) ? result.windows : [];
   }
 
   async list_apps(options) {
