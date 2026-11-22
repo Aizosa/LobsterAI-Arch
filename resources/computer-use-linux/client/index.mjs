@@ -77,6 +77,22 @@ function unwrapResult(result) {
   return result;
 }
 
+/**
+ * Most tools pass { window: { id, app, ... } }, but get_window historically
+ * hands the bare window object through. The helper reads the id from
+ * window.id (or window_id), so wrap a bare object that carries an id; a
+ * request that already nests under window passes through unchanged.
+ */
+function asWindowArgs(options) {
+  if (
+    options && typeof options === 'object' && !Array.isArray(options)
+    && options.window === undefined && typeof options.id === 'number'
+  ) {
+    return { window: options };
+  }
+  return options;
+}
+
 export class ComputerUseClient {
   /** @param {{ helperPath: string, timeoutMs?: number, env?: Object }} options */
   constructor(options) {
@@ -268,7 +284,7 @@ export class ComputerUseClient {
   }
 
   async get_window(options) {
-    return this.request('get_window', options);
+    return this.request('get_window', asWindowArgs(options));
   }
 
   async get_window_state(options) {
