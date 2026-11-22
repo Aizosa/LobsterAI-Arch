@@ -30,10 +30,15 @@
  * window cannot be read on a composited session. Instead the full screen is
  * captured and cropped to the rect AT-SPI reported for the window.
  */
+#define _GNU_SOURCE
 #include "cu.h"
 
 #include <cairo/cairo.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <gio/gio.h>
+#include <gio/gunixfdlist.h>
+#include <poll.h>
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
@@ -259,6 +264,173 @@ static CuImage *x11_capture_window_pixels(Window win) {
 }
 
 #endif /* CU_HAVE_X11 */
+
+/* ----------------------- KWin ScreenShot2 (KDE Wayland) ----------------------- */
+
+/*
+ * KWin's private, restricted-interface DBus service. Unlike every other
+ * backend here it hands back raw pixels over a pipe rather than a PNG file:
+ * we put the write end of a pipe in a GUnixFDList, KWin writes the QImage bits
+ * into it and closes it, and the reply dictionary carries width/height/stride
+ * /format.
+ *
+ * The service is permission-gated: KWin resolves our pid back to its .desktop
+ * file and only allows interfaces listed in X-KDE-DBUS-Restricted-Interfaces.
+ * A non-whitelisted caller receives an Error.NoAuthorized reply; this backend
+ * then returns NULL so the portal fallback can run.
+ */
+
+#define CU_SS2_SERVICE "org.kde.KWin.ScreenShot2"
+#define CU_SS2_PATH    "/org/kde/KWin/ScreenShot2"
+#define CU_SS2_IFACE   "org.kde.KWin.ScreenShot2"
+
+/* Qt6 QImage::Format values we may have to decode. Packed QRgb formats
+ * (RGB32/ARGB32) are 0x??RRGGBB, little-endian memory B,G,R,(A/x); the
+ * byte-ordered formats (RGBX8888/RGBA8888) lay R,G,B,(X/A) down verbatim. */
+#define CU_QIMAGE_RGB32        4
+#define CU_QIMAGE_ARGB32       5
+#define CU_QIMAGE_ARGB32_PREMULT 6
+#define CU_QIMAGE_RGBX8888    16
+#define CU_QIMAGE_RGBA8888    17
+#define CU_QIMAGE_RGBA8888_PREMULT 18
+
+static bool cu_ss2_available(void) {
+  return cu_bus_name_has_owner(CU_SS2_SERVICE);
+}
+
+/* Read every byte the compositor wrote into the pipe until it closes the
+ * write end. Polls with a timeout so a dead KWin cannot block the session. */
+static GByteArray *ss2_read_pipe(int fd) {
+  GByteArray *buf = g_byte_array_new();
+  unsigned char chunk[65536];
+  while (true) {
+    struct pollfd pfd = { fd, POLLIN, 0 };
+    int ready = poll(&pfd, 1, 10000);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      g_byte_array_free(buf, TRUE);
+      return NULL;
+    }
+    if (ready == 0) {
+      g_debug("[ss2] timed out reading screenshot pipe");
+      g_byte_array_free(buf, TRUE);
+      return NULL;
+    }
+    if (!(pfd.revents & POLLIN)) break;
+    ssize_t n = read(fd, chunk, sizeof(chunk));
+    if (n > 0) {
+      g_byte_array_append(buf, chunk, (guint)n);
+    } else if (n == 0) {
+      break; /* EOF: writer closed its end */
+    } else {
+      if (errno == EINTR) continue;
+      g_byte_array_free(buf, TRUE);
+      return NULL;
+    }
+  }
+  return buf;
+}
+
+/* Convert the raw QImage bits into packed RGB, honouring the pixel layout the
+ * reply reported. The byte-ordered RGBX/RGBA formats keep R,G,B in memory
+ * order; the packed RGB32/ARGB32 formats are little-endian B,G,R,(A/x). */
+static CuImage *ss2_decode(const GByteArray *raw, guint32 width, guint32 height,
+                            guint32 stride, guint32 format) {
+  if (!raw || raw->len == 0 || width == 0 || height == 0) return NULL;
+  CuImage *img = image_new((int)width, (int)height);
+  bool byte_ordered = (format == CU_QIMAGE_RGBX8888 ||
+                       format == CU_QIMAGE_RGBA8888 ||
+                       format == CU_QIMAGE_RGBA8888_PREMULT);
+  for (guint32 y = 0; y < height; y++) {
+    const unsigned char *row = raw->data + (gsize)y * stride;
+    unsigned char *out = img->pixels + (gsize)y * img->stride;
+    for (guint32 x = 0; x < width; x++) {
+      const unsigned char *px = row + (gsize)x * 4;
+      unsigned char r, g, b;
+      if (byte_ordered) { r = px[0]; g = px[1]; b = px[2]; }
+      else              { b = px[0]; g = px[1]; r = px[2]; }
+      out[x * 3 + 0] = r;
+      out[x * 3 + 1] = g;
+      out[x * 3 + 2] = b;
+    }
+  }
+  return img;
+}
+
+static CuImage *screenshot2_capture_fullscreen(void) {
+  GError *err = NULL;
+  GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+  if (!conn) {
+    if (err) g_error_free(err);
+    capture_set_error("No session bus; KWin ScreenShot2 is unreachable.");
+    return NULL;
+  }
+
+  int fds[2];
+  if (pipe2(fds, O_CLOEXEC) != 0) {
+    capture_set_error("Could not create screenshot pipe: %s", strerror(errno));
+    g_object_unref(conn);
+    return NULL;
+  }
+
+  GUnixFDList *fd_list = g_unix_fd_list_new();
+  int fd_index = g_unix_fd_list_append(fd_list, fds[1], NULL);
+  if (fd_index < 0) {
+    capture_set_error("Could not hand the screenshot pipe to KWin.");
+    close(fds[0]); close(fds[1]);
+    g_object_unref(fd_list); g_object_unref(conn);
+    return NULL;
+  }
+
+  GVariantBuilder opts;
+  g_variant_builder_init(&opts, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add(&opts, "{sv}", "include-cursor",
+                        g_variant_new_boolean(FALSE));
+
+  GVariant *reply = g_dbus_connection_call_with_unix_fd_list_sync(
+      conn, CU_SS2_SERVICE, CU_SS2_PATH, CU_SS2_IFACE, "CaptureActiveScreen",
+      g_variant_new("(a{sv}h)", &opts, fd_index),
+      G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 10000,
+      fd_list, NULL, NULL, &err);
+
+  close(fds[1]);
+  g_object_unref(fd_list);
+
+  if (!reply) {
+    capture_set_error("KWin ScreenShot2 call failed: %s",
+                      err ? err->message : "unknown error");
+    if (err) g_error_free(err);
+    close(fds[0]);
+    g_object_unref(conn);
+    return NULL;
+  }
+
+  /* The reply body is a one-element tuple wrapping the results dictionary. */
+  GVariant *body = g_variant_get_child_value(reply, 0);
+  guint32 width = 0, height = 0, stride = 0, format = 0;
+  g_variant_lookup(body, "width",  "u", &width);
+  g_variant_lookup(body, "height", "u", &height);
+  g_variant_lookup(body, "stride", "u", &stride);
+  g_variant_lookup(body, "format", "u", &format);
+  g_variant_unref(body);
+  g_variant_unref(reply);
+
+  GByteArray *raw = ss2_read_pipe(fds[0]);
+  close(fds[0]);
+  g_object_unref(conn);
+
+  if (!raw || width == 0 || height == 0) {
+    capture_set_error("KWin ScreenShot2 returned no image data.");
+    if (raw) g_byte_array_free(raw, TRUE);
+    return NULL;
+  }
+  if (stride == 0) stride = width * 4;
+
+  CuImage *img = ss2_decode(raw, width, height, stride, format);
+  g_byte_array_free(raw, TRUE);
+  if (!img) capture_set_error("KWin ScreenShot2 image decode failed.");
+  return img;
+}
 
 /* --------------------------- Wayland via portal --------------------------- */
 
@@ -536,6 +708,9 @@ static CuImage *take_png_file(char *path) {
  *   composited session (BadMatch), but when it fails it fails in microseconds,
  *   so trying it is free.
  *
+ *   Then KWin ScreenShot2 — silent compositor capture on KDE Wayland; gated by
+ *   the desktop whitelist, and returns NULL to fall through when refused.
+ *
  *   Then the portal — the portable path. May show a dialog the first time.
  *
  *   Then the desktop's own tool (currently only XFCE has one that works
@@ -567,6 +742,22 @@ CuImage *cu_capture_window_rect(unsigned long x11_window, int x, int y, int w,
     if (direct) return direct;
   }
 #endif
+
+  /* 2.5 KWin ScreenShot2 — silent compositor capture on KDE Wayland. Fails
+        safe: an unauthorized or absent service returns NULL and the portal
+        below still runs. */
+  if (cu_session_is_wayland() && cu_ss2_available()) {
+    CuImage *screen = screenshot2_capture_fullscreen();
+    if (screen) {
+      if (!have_rect) return screen;
+      CuImage *cropped = image_crop(screen, x, y, w, h);
+      if (cropped) {
+        cu_image_free(screen);
+        return cropped;
+      }
+      return screen;
+    }
+  }
 
   /* 3. Portal. Captures the full screen; we crop to the AT-SPI rect. */
   char *portal_path = NULL;
@@ -658,6 +849,7 @@ int cu_portal_version(const char *interface) {
 const char *cu_capture_preferred_backend(void) {
   if (cu_gnome_screenshot_path_available()) return "gnome-shell";
   if (cu_session_is_wayland()) {
+    if (cu_ss2_available()) return "kwin-screenshot2";
     if (cu_wlroots_likely()) return "wlroots-screencopy";
     if (cu_portal_version("org.freedesktop.portal.Screenshot") > 0) return "portal";
     if (cu_have_command("xfce4-screenshooter")) return "xfce4-screenshooter";

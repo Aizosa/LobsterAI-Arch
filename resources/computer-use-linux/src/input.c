@@ -729,6 +729,13 @@ char *cu_permissions_status(void) {
     cu_json_key(&j, "detail");
     cu_json_str(&j, "GNOME Shell's screenshot interface captures silently on both "
                     "X11 and Wayland.");
+  } else if (cu_session_is_wayland() &&
+             cu_bus_name_has_owner("org.kde.KWin.ScreenShot2")) {
+    cu_json_key(&j, "status"); cu_json_str(&j, "granted");
+    cu_json_key(&j, "detail");
+    cu_json_str(&j, "KWin's ScreenShot2 restricted interface captures silently on "
+                    "KDE Wayland; authorization is granted through the desktop "
+                    "whitelist in the packaged .desktop file.");
   } else if (de.portal_screenshot_version > 0) {
     cu_json_key(&j, "status"); cu_json_str(&j, "prompt-required");
     cu_json_key(&j, "detail");

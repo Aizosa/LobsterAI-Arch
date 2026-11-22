@@ -317,6 +317,17 @@ unsigned long cu_x11_find_window_by_pid_title(int pid, const char *title);
  * client whose _NET_WM_PID is absent.
  */
 unsigned long cu_x11_find_window(int pid, const char *title, const char *wm_class_query);
+/*
+ * KDE plasma-window-management Wayland enumeration fallback. Appends window
+ * entries to a JSON array already opened by the caller ("windows"). Windows
+ * whose pid is already present in `existing_pids` (a GHashTable keyed by
+ * GINT_TO_POINTER(pid)) are skipped so the two sources never duplicate a
+ * window; the table may be NULL to append every reported window. A no-op stub
+ * when wayland-client is absent or the compositor does not export the
+ * protocol, so the AT-SPI list stays authoritative on every other desktop.
+ */
+void cu_plasma_append_windows(CuJson *j, GHashTable *existing_pids);
+
 /* Fills `out` with lowercased WM_CLASS candidates derived from a desktop entry. */
 void cu_desktop_wm_class_candidates(const char *query, GPtrArray *out);
 /* Reads _NET_WM_PID and _NET_WM_NAME off an X window; each out param may be NULL. */

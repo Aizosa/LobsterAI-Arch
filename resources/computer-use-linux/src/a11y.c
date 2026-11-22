@@ -193,9 +193,10 @@ static long long obj_window_id(AtspiAccessible *obj) {
   return (long long)(h & 0x7fffffff);
 }
 
-static void collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j) {
+static int collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j,
+                            GHashTable *pids) {
   int apps = obj_child_count(desktop);
-  cu_json_arr_begin(j);
+  int found = 0;
   for (int i = 0; i < apps; i++) {
     AtspiAccessible *app = obj_child(desktop, i);
     if (!app) continue;
@@ -226,6 +227,8 @@ static void collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j) {
       unsigned long xwin = cu_x11_find_window(pid, title, app_name);
 
       g_hash_table_insert(a->windows, GINT_TO_POINTER((int)wid), win);
+      if (pids && pid > 0)
+        g_hash_table_insert(pids, GINT_TO_POINTER(pid), GINT_TO_POINTER(1));
 
       cu_json_obj_begin(j);
       cu_json_key(j, "id"); cu_json_int(j, wid);
@@ -245,6 +248,7 @@ static void collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j) {
       cu_json_obj_end(j);
 
       g_free(title);
+      found++;
       /* win stays in the table; do not unref. */
     }
 
@@ -255,6 +259,8 @@ static void collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j) {
       bool has_rect = obj_rect(app, ATSPI_COORD_TYPE_SCREEN, &x, &y, &cw, &ch);
       unsigned long xwin = cu_x11_find_window(pid, title, app_name);
       g_hash_table_insert(a->windows, GINT_TO_POINTER((int)wid), app);
+      if (pids && pid > 0)
+        g_hash_table_insert(pids, GINT_TO_POINTER(pid), GINT_TO_POINTER(1));
       cu_json_obj_begin(j);
       cu_json_key(j, "id"); cu_json_int(j, wid);
       cu_json_key(j, "app"); cu_json_str(j, app_name);
@@ -271,12 +277,13 @@ static void collect_windows(CuA11y *a, AtspiAccessible *desktop, CuJson *j) {
       cu_json_obj_end(j);
       cu_json_obj_end(j);
       g_free(title);
+      found++;
     }
 
     g_free(app_name);
     g_object_unref(app);
   }
-  cu_json_arr_end(j);
+  return found;
 }
 
 char *cu_a11y_list_windows(CuA11y *a) {
@@ -287,11 +294,20 @@ char *cu_a11y_list_windows(CuA11y *a) {
   g_mutex_lock(&a->lock);
   g_hash_table_remove_all(a->windows);
 
+  /* pids records every window AT-SPI already listed, so the plasma mirror
+     below can skip duplicates rather than only kicking in when the tree is
+     empty (AT-SPI often covers some but not all native clients). */
+  GHashTable *pids = g_hash_table_new(g_direct_hash, g_direct_equal);
+
   CuJson j; cu_json_init(&j);
   cu_json_obj_begin(&j);
   cu_json_key(&j, "windows");
-  collect_windows(a, desktop, &j);
+  cu_json_arr_begin(&j);
+  collect_windows(a, desktop, &j, pids);
+  cu_plasma_append_windows(&j, pids);
+  cu_json_arr_end(&j);
   cu_json_obj_end(&j);
+  g_hash_table_destroy(pids);
 
   char *out = g_strdup(j.buf->str);
   cu_json_free(&j);
@@ -482,7 +498,7 @@ static AtspiAccessible *lookup_window_rescan(CuA11y *a, long long window_id) {
      writer is enough to warm the cache. */
   CuJson scratch; cu_json_init(&scratch);
   cu_json_arr_begin(&scratch);
-  collect_windows(a, desktop, &scratch);
+  collect_windows(a, desktop, &scratch, NULL);
   cu_json_arr_end(&scratch);
   cu_json_free(&scratch);
   g_object_unref(desktop);

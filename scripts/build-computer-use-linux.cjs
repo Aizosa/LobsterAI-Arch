@@ -40,7 +40,7 @@ const REQUIRED_PKGS = [
   'gobject-2.0',
   'gio-2.0',
 ];
-const OPTIONAL_PKGS = ['x11', 'xtst', 'libei-1.0'];
+const OPTIONAL_PKGS = ['x11', 'xtst', 'libei-1.0', 'wayland-client'];
 
 function fail(message) {
   console.error(`\n[cu-linux] ${message}\n`);
@@ -83,9 +83,10 @@ function checkDependencies() {
   if (missingOptional.length > 0) {
     console.warn(
       `[cu-linux] WARNING: ${missingOptional.join(', ')} not found. `
-      + 'Install libx11/libxtst for X11/XWayland support and libei for the '
-      + 'Wayland EIS virtual-seat input route; without them input injection '
-      + 'degrades to the deprecated Notify* portal methods or is unavailable.',
+      + 'Install libx11/libxtst for X11/XWayland support, libei for the '
+      + 'Wayland EIS virtual-seat input route, and wayland-client for the KDE '
+      + 'plasma-window-management window enumeration fallback; without them the '
+      + 'corresponding feature degrades or is unavailable.',
     );
   }
 }

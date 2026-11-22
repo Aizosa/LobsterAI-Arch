@@ -42,6 +42,21 @@ else
   $(info [cu-linux] libei headers missing; Wayland input falls back to Notify*)
 endif
 
+# wayland-client is optional: the KDE plasma-window-management fallback lists
+# native Wayland clients that AT-SPI misses. Without it plasma_wm.c compiles to
+# a no-op stub and the generated marshalling code is not built.
+WL_CFLAGS := $(shell pkg-config --cflags wayland-client 2>/dev/null)
+WL_LIBS   := $(shell pkg-config --libs wayland-client 2>/dev/null)
+ifneq ($(strip $(WL_LIBS)),)
+  CFLAGS += -DCU_HAVE_WAYLAND_CLIENT $(WL_CFLAGS)
+  LDLIBS += $(WL_LIBS)
+  WL_SRC = src/plasma_wm.c src/plasma-window-management-protocol.c
+  $(info [cu-linux] wayland-client plasma-window-management backend enabled)
+else
+  WL_SRC = src/plasma_wm.c
+  $(info [cu-linux] wayland-client missing; plasma window enumeration disabled)
+endif
+
 # Source layout, by concern:
 #   main/json     protocol and serialisation
 #   a11y          AT-SPI2 tree (the portable part: same on every desktop)
@@ -55,7 +70,7 @@ endif
 #   window        EWMH activation/closing, window-manager probing
 SRC = src/main.c src/json.c src/a11y.c src/capture.c src/input.c \
       src/desktop_env.c src/gnome.c src/xfce.c src/wayland.c \
-      src/desktop.c src/window.c
+      src/desktop.c src/window.c $(WL_SRC)
 OBJ = $(SRC:.c=.o)
 BIN = lobsterai-computer-use-linux
 
