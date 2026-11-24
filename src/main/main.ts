@@ -2213,22 +2213,18 @@ if (isLinux || isWindows) {
   app.commandLine.appendSwitch('no-sandbox');
 }
 if (isLinux) {
-  app.commandLine.appendSwitch('disable-dev-shm-usage');
-  // Linux 上硬件 GPU 进程会反复启动失败 (error_code=1002)，Chromium 随后调用
-  // IntentionallyCrashBrowserForUnusableGpuProcess() 主动 SIGTRAP 退出整个应用
-  // (日志: "GPU process isn't usable. Goodbye.")。
-  // 注意：不能用 --disable-gpu 一刀切——完全没有 GPU 进程时走纯软件合成，
-  // 在 X11/XWayland 下 damage 跟踪会坏（窗口残影），首帧也可能渲染不出（白屏）。
-  // 正确做法是让 GPU 进程用 SwiftShader 软件渲染正常启动：渲染管线完整，
-  // GPU 进程可用即不会触发上述 FATAL，只是不用硬件加速。
-  // 设置 LOBSTERAI_ENABLE_GPU=1 可强制启用硬件 GPU（用于驱动正常的机器）。
-  const forceHardwareGpu =
-    process.env.LOBSTERAI_ENABLE_GPU === '1' || process.env.LOBSTERAI_ENABLE_GPU === 'true';
-  if (forceHardwareGpu) {
-    // 硬件 GPU 路径：附带禁用 GPU 进程沙箱，尝试绕过 error_code=1002
-    app.commandLine.appendSwitch('disable-gpu-sandbox');
-  } else if (!disableGpu) {
-    // SwiftShader 软件渲染（默认）
+  // 历史包袱说明：最初硬件 GPU 进程反复启动失败 (error_code=1002)，Chromium
+  // 随后调用 IntentionallyCrashBrowserForUnusableGpuProcess() 主动 SIGTRAP
+  // 退出整个应用 (日志: "GPU process isn't usable. Goodbye.")。当时先用
+  // --disable-gpu 一刀切兜底（副作用：白屏/窗口残影），后改 SwiftShader
+  // 软件渲染保命。真正的根因是 renderer/GPU 进程被困在破损的 namespace
+  // sandbox 里、共享内存建不出来——已在引擎层修复 (webPreferences.sandbox)。
+  // 硬件 GPU 现恢复为默认：软件渲染把全部绘制压在 CPU 上、共享内存若走
+  // /tmp 磁盘文件也会拖慢 IPC，UI 均明显卡顿。
+  // 驱动异常的机器可设 LOBSTERAI_SWIFTSHADER=1 回退软件渲染。
+  const forceSwiftShader =
+    process.env.LOBSTERAI_SWIFTSHADER === '1' || process.env.LOBSTERAI_SWIFTSHADER === 'true';
+  if (forceSwiftShader && !disableGpu) {
     app.commandLine.appendSwitch('use-gl', 'angle');
     app.commandLine.appendSwitch('use-angle', 'swiftshader');
     app.commandLine.appendSwitch('enable-unsafe-swiftshader');
