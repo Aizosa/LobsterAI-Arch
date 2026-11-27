@@ -57,9 +57,6 @@ jobs:
       - name: Build computer-use Linux helper
         run: npm run build:computer-use-linux
 
-      - name: Build OpenClaw runtime (linux-x64)
-        run: npm run openclaw:runtime:linux-x64
-
       - name: Build dsh runtime (linux-x64)
         run: npm run dsh:runtime:linux-x64
 
