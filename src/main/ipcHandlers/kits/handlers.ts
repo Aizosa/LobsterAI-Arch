@@ -36,7 +36,7 @@ import {
   uninstallComputerUseRuntime,
 } from '../../computerUse/computerUseRuntime';
 import { cpRecursiveSync } from '../../fsCompat';
-import { OpenClawConfigImpact } from '../../libs/openclawConfigImpact';
+import { resolveSkillInstallTarget } from '../../skills/skillInstallTarget';
 import type { SkillManager } from '../../skills/skillManager';
 import { createSkinPackKitLifecycle } from '../../skins/skinPackKitLifecycle';
 import type { SqliteStore } from '../../sqliteStore';
@@ -91,7 +91,7 @@ export interface KitHandlerDeps {
   syncOpenClawConfig: (options: {
     reason: string;
     restartGatewayIfRunning?: boolean;
-    expectedImpact?: OpenClawConfigImpact;
+    expectedImpact?: string;
   }) => Promise<{ success: boolean; changed: boolean; error?: string }>;
 }
 
@@ -379,6 +379,10 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
       const installedSkillMetadata: Record<string, KitSkillMetadata> = {};
       const sourceSkillMetadata = normalizeKitSkillMetadataList(params.skillList);
 
+      const reservedBuiltInIds = typeof skillManager.listBuiltInSkillIds === 'function'
+        ? skillManager.listBuiltInSkillIds()
+        : new Set<string>();
+
       if (isComputerUseKit && !computerUseBundleDescriptor) {
         // Linux: no downloadable bundle. The helper runtime was staged above,
         // and the built-in skill copy is written directly into the SKILLs root.
@@ -393,12 +397,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
 
       for (const skillDir of skillDirs) {
         const folderName = normalizeFolderName(path.basename(skillDir));
-        let targetDir = path.resolve(root, folderName);
-        let suffix = 1;
-        while (fs.existsSync(targetDir)) {
-          targetDir = path.resolve(root, `${folderName}-${suffix}`);
-          suffix += 1;
-        }
+        const { targetDir } = resolveSkillInstallTarget(root, folderName, reservedBuiltInIds);
         cpRecursiveSync(skillDir, targetDir);
         normalizeWindowsAttrs(targetDir);
         const installedSkillId = path.basename(targetDir);
@@ -447,7 +446,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         // restart would make the user wait for gateway startup before using it.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-installed',
-          expectedImpact: OpenClawConfigImpact.Sync,
+          expectedImpact: 'sync',
         });
         if (!syncResult.success) {
           throw new Error(syncResult.error || 'OpenClaw config sync failed after Computer Use install');
@@ -533,7 +532,7 @@ export function registerKitHandlers(deps: KitHandlerDeps): void {
         // runtime files are removed, without restarting the gateway.
         const syncResult = await syncOpenClawConfig({
           reason: 'computer-use-kit-uninstalled',
-          expectedImpact: OpenClawConfigImpact.Sync,
+          expectedImpact: 'sync',
         });
         await uninstallComputerUseRuntime();
         if (!syncResult.success) {
