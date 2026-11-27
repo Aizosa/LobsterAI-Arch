@@ -83,7 +83,7 @@ export class CompanionForegroundMonitor extends EventEmitter implements Foregrou
         if (this.polling) return;
         this.polling = true;
         readActiveAppId()
-          .then(appId => { if (appId) this.update(appId); })
+          .then(appId => { if (appId) this.update(appId, null); })
           .catch(error => console.warn('[DesktopCompanion] Foreground app lookup failed:', error))
           .finally(() => { this.polling = false; });
       };
