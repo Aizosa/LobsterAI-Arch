@@ -39,7 +39,7 @@ export class WordPanelHost {
     const window = this.options.getWindow();
     if (!window || window.isDestroyed()) return Promise.reject(new Error('Word panel window is unavailable'));
     const view = new WebContentsView({ webPreferences: {
-      preload: this.options.preload, sandbox: true, contextIsolation: true, nodeIntegration: false,
+      preload: this.options.preload, sandbox: false, contextIsolation: true, nodeIntegration: false,
       // Parked documents still need to checkpoint edits and answer agent requests.
       backgroundThrottling: false,
     } });

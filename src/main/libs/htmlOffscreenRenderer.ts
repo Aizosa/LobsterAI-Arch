@@ -94,7 +94,7 @@ export async function renderHtmlFilesOffscreen(
     backgroundColor: '#ffffff',
     paintWhenInitiallyHidden: true,
     webPreferences: {
-      sandbox: true,
+      sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,

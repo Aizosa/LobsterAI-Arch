@@ -1495,7 +1495,7 @@ export class DshBootstrap {
         partition: DSH_ECOSYSTEM_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true,
+        sandbox: false,
       },
     });
 

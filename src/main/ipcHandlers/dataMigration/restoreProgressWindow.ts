@@ -160,7 +160,7 @@ export function createRestoreProgressWindowController(): RestoreProgressWindowCo
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true,
+        sandbox: false,
         partition: `data-migration-restore-${Date.now()}`,
       },
     });
